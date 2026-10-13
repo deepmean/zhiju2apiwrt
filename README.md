@@ -263,14 +263,25 @@ chmod +x /etc/init.d/zhiju2api
 logread -e zhiju2api
 ```
 
-跨固件升级保留（`/etc/sysupgrade.conf`）：
+跨固件升级保留：
+
+```sh
+ssh jcg 'sh -s' < tools/keep-on-sysupgrade.sh
+```
+
+脚本幂等地往 `/etc/sysupgrade.conf` 追加四行，并逐条断言路径确实存在（不存在的条目等于没保）：
 
 ```
-/opt/zhiju2api/
+/opt/zhiju2api/               # 二进制、conf、tokens、台账
 /etc/init.d/zhiju2api
 /etc/rc.d/S96zhiju2api
 /etc/rc.d/K10zhiju2api
 ```
+
+> 只写 `/opt/zhiju2api/` 是不够的：升级后文件回来了，但没有 init 脚本和 `rc.d` 链接，
+> 服务不会自启 —— 这台路由器上其它服务（qwen2api、wb-proxy、mimo-proxy…）都是四条一起登记的。
+>
+> 保留的是**二进制本身**，所以升级固件后跑的还是升级前那版；要换版本就再 `deploy-router.sh` 一次。
 
 > **时区**：init 脚本里设的是 `TZ=CST-8`（POSIX 形式）。OpenWrt 没有 tzdata，
 > 写 `TZ=Asia/Shanghai` 会被 musl 静默退回 UTC。
