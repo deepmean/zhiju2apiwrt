@@ -32,8 +32,10 @@ type Price struct {
 
 	Unlimited   bool      `json:"unlimited,omitempty"`
 	RemainCount int       `json:"quota_remain,omitempty"`
-	Fetched     time.Time `json:"fetched"`
-	Err         string    `json:"error,omitempty"`
+	// Billing explains the cases where the 灵力 meter does not apply at all.
+	Billing   string    `json:"billing,omitempty"`
+	Fetched   time.Time `json:"fetched"`
+	Err       string    `json:"error,omitempty"`
 }
 
 type priceCache struct {
@@ -246,6 +248,14 @@ func (s *Server) modelList(ctx context.Context, withPrices bool) []map[string]an
 				}
 			}
 		}
+		// Say out loud which models are switched off, and why, instead of leaving a
+		// caller to discover it from a 400.
+		if r, ok := s.cat.Resolve(e.OpenAI); ok && r.Kind == "mj" {
+			entry["enabled"] = s.cfg.MJEnabled
+			if !s.cfg.MJEnabled {
+				entry["disabled_reason"] = mjDisabledText
+			}
+		}
 		out = append(out, entry)
 	}
 	return out
@@ -313,8 +323,10 @@ func (s *Server) handleModelPrices(w http.ResponseWriter, r *http.Request) {
 			p, err := s.c.PriceOf(r.Context(), t.key, t.contentType, t.id, t.contentType)
 			if err != nil {
 				// No price row upstream (quota-billed models). Report the quota instead,
-				// which is the only signal the account gives for them.
+				// which is the only signal the account gives for them — and note that
+				// "no 灵力 price" is not the same as free.
 				entry := &Price{GroupKey: t.key, Name: t.name, ContentType: t.contentType, ModelID: t.id, Err: err.Error()}
+				entry.Billing = "not metered in 灵力 (no price policy upstream); billed by task, not by credits"
 				if n, ok := s.cat.RemainOf(t.key); ok {
 					entry.Unlimited = n < 0
 					entry.RemainCount = n

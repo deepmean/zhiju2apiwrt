@@ -39,6 +39,14 @@ MAX_CONTEXT_ROUNDS=5
 # GET /v1/models/params prints the whole table; GET /v1/models carries it per model.
 IMAGE_SIZE=2K
 
+# --- Midjourney: off unless you mean it ---------------------------------------------
+# MJ is NOT metered in 灵力. The billing module has no price row for it (the lookup
+# answers with a generic error) and the account catalog shows remain_count=-1 — but
+# "no 灵力 price" does NOT mean free: it is the most expensive model on the account.
+# Keeping this false means a typo or a client that picks the first model in the list
+# cannot spend it. GET /v1/models marks the mj entries with enabled=false while it is off.
+MJ_ENABLED=false
+
 # --- cost guard (server-quoted, not guessed) ----------------------------------------
 # Before generating, the gateway asks the upstream billing module
 # (/v1/integral/getpolicy) what the request costs, logs it, and returns it on the

@@ -31,6 +31,13 @@ type imageRequest struct {
 	Image       string         `json:"image,omitempty"`
 }
 
+// mjDisabledText explains why Midjourney is off by default, in the error itself, so the
+// reason travels with the refusal instead of living only in the docs.
+const mjDisabledText = "Midjourney is disabled (MJ_ENABLED=false). It is not metered in 灵力 — the " +
+	"billing module has no price row for it and the account shows it as unlimited — but it is the " +
+	"most expensive model on the account, so it must be enabled deliberately. Set MJ_ENABLED=true " +
+	"in the config to allow it."
+
 // genOptions is a validated, model-aware image request.
 type genOptions struct {
 	Prompt    string
@@ -221,6 +228,10 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	if !ok || res.Kind == "chat" || res.ID <= 0 {
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error",
 			fmt.Sprintf("model %q is not an image model; use GET /v1/models and pick a *-image id", req.Model))
+		return
+	}
+	if res.Kind == "mj" && !s.cfg.MJEnabled {
+		writeOpenAIError(w, http.StatusBadRequest, "model_disabled", mjDisabledText)
 		return
 	}
 

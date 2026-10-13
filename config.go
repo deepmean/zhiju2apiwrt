@@ -39,6 +39,13 @@ type Config struct {
 	PriceCacheTTL     time.Duration
 	ParamsCacheTTL    time.Duration
 
+	// Midjourney is NOT metered in 灵力: the billing module has no price row for it (the
+	// lookup answers with a generic error) and the account catalog shows remain_count=-1.
+	// "No 灵力 price" does NOT mean free — it is the most expensive model on the account,
+	// billed outside this meter. It is therefore off unless explicitly enabled, so it can
+	// never be reached by a typo or a client that picks the first model in the list.
+	MJEnabled bool
+
 	ChatMaxConcurrent  int
 	ImageMaxConcurrent int
 
@@ -151,6 +158,7 @@ func LoadConfig() *Config {
 		FastModel:        envBool("FAST_MODEL", true),
 		MaxContextRounds: envInt("MAX_CONTEXT_ROUNDS", 5),
 		ImageSize:        envStr("IMAGE_SIZE", "2K"),
+		MJEnabled:        envBool("MJ_ENABLED", false),
 		// 0 = annotate only (the default): every request logs and reports its estimated
 		// cost, nothing is refused.
 		MaxCostPerRequest: envInt("MAX_COST_PER_REQUEST", 0),

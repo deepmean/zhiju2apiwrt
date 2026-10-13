@@ -358,9 +358,24 @@ curl http://192.168.26.1:8080/v1/images/edits \
 | 香蕉 2 `nanobananaFlash22k` | 另含 `1:4` `4:1` `1:8` `8:1` | 只有 `2K` |
 | 升智-2 `gptimage2` | 默认 `auto` | 只有 `2K` |
 | 升智-2.5创作/编辑版 | 默认 `auto` | 只有 `2K`（4K 是另一个模型 id） |
-| Midjourney V7 `mj2` | 只有 `4:3` `1:1` `3:4` | 无档位概念 |
+| Midjourney V7 `mj2` | 只有 `4:3` `1:1` `3:4` | 无档位概念（**默认禁用，见下**） |
 
 所以 `IMAGE_SIZE` 配置项是**偏好**不是开关：模型支持才用，否则用模型自己的默认值。
+
+### Midjourney 默认禁用（`MJ_ENABLED=false`）
+
+MJ **不走灵力计量**：计费模块里没有它的价目行（getpolicy 恒回 `ret=500`），账号目录里也是
+`remain_count=-1`。但**"没有灵力价目"不等于免费** —— 它是这个账号上最贵的一档，只是按次而不是
+按灵力结算。
+
+所以默认关掉：请求 `mj2-image` 会得到
+
+```json
+{"error":{"type":"model_disabled","message":"Midjourney is disabled (MJ_ENABLED=false). ..."}}
+```
+
+`/v1/models` 里 MJ 条目会带 `"enabled": false` 和 `disabled_reason`，`/v1/models/prices` 里带
+`billing: "not metered in 灵力 ..."`。确实要用就显式打开 `MJ_ENABLED=true`。
 
 ```sh
 # 看某个模型支持什么
