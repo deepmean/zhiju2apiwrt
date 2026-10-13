@@ -187,6 +187,22 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 		for key, id := range ids {
 			if n, ok := remainByID[id]; ok {
 				remain[key] = n
+				continue
+			}
+			// The account catalog can key a model by a different id than the one the
+			// draw routes use (Midjourney is id 8 there, 139 in cfg/list), so fall back
+			// to matching by display name before giving up on the quota.
+			for _, group := range [][]Model{snap.Models["draw"], snap.Models["repair"], snap.Models["text"]} {
+				for _, m := range group {
+					if m.Key != key || m.Name == "" {
+						continue
+					}
+					if rid := matchName(nameToID, m.Name); rid > 0 {
+						if n, ok := remainByID[rid]; ok {
+							remain[key] = n
+						}
+					}
+				}
 			}
 		}
 	}
