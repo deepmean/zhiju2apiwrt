@@ -74,7 +74,19 @@ let tableOk = true, why = ''
 try {
   const t = JSON.parse(sizes)
   const keys = Object.keys(t)
-  checks.push(['分辨率表含 1K 与 2K 两档', keys.length > 0 && Object.values(t).every((x) => x['1K'] && x['2K'])])
+  // A model the upstream declares no parameters for gets a fallback table with a single
+  // tier (banana21 has no declaration at all), so requiring both 1K and 2K only applies
+  // when the model actually declares them.
+  const declaredTiers = await evalJs(`(function(){
+    var s = state.models.filter(function(x){return x.id === '${MODEL}'})[0];
+    return JSON.stringify(s && s.image_sizes || []);
+  })()`)
+  const tiers = JSON.parse(declaredTiers || '[]')
+  if (tiers.length > 1) {
+    checks.push([`分辨率表含 ${tiers.join('/')} 各档`, keys.length > 0 && Object.values(t).every((x) => tiers.every((k) => x[k]))])
+  } else {
+    checks.push(['分辨率表每个比例至少有一档', keys.length > 0 && Object.values(t).every((x) => Object.keys(x).length > 0)])
+  }
   for (const [ratio, tiers] of Object.entries(t)) {
     if (!/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(ratio)) { tableOk = false; why = 'bad ratio ' + ratio; break }
     for (const [tier, size] of Object.entries(tiers)) {

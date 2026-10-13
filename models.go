@@ -113,10 +113,13 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 	}
 
 	ids := map[string]int{}
+	names := map[string]string{}
+	drawCapable := map[string]bool{}
 	// 1) The web client's own config carries the full model table (model_key + model_id)
 	// for every family, which is the freshest and most complete source there is.
 	if cfgMap, err := cat.c.CfgList(ctx); err == nil {
 		collectModelIDs(cfgMap, ids)
+		collectModelTable(cfgMap, names, drawCapable)
 	} else {
 		logf("WARN", "cfg/list unavailable for model ids: %v", err)
 	}
@@ -207,6 +210,38 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 				}
 			}
 		}
+	}
+
+	// 4b) cfg/list also knows image-capable models the snapshot's draw/repair lists omit —
+	//     every 4K tier, for instance: the snapshot carries only the 2K variants of 香蕉 Pro,
+	//     香蕉 2 and 升智-2.5, so nothing downstream could ever select 4K even though the
+	//     web client offers it. cfg/list flags them with draw:true.
+	//
+	//     They join the repair family, which is the chain the web client uses for them (a
+	//     real 香蕉 Pro 2K session sends model_code=nanobanana2 with the id cfg/list lists).
+	for key := range drawCapable {
+		if key == "" {
+			continue
+		}
+		if _, ok := ids[key]; !ok {
+			continue // no id means nothing to call
+		}
+		already := false
+		for _, group := range [][]Model{snap.Models["text"], snap.Models["draw"], snap.Models["repair"]} {
+			for _, m := range group {
+				if m.Key == key {
+					already = true
+				}
+			}
+		}
+		if already {
+			continue
+		}
+		snap.Models["repair"] = append(snap.Models["repair"], Model{
+			Key: key, Name: names[key], Type: "repair",
+			Desc: "image-capable model from cfg/list (absent from the snapshot's draw/repair lists)",
+		})
+		logf("INFO", "cfg/list adds an image model the snapshot omits: %s (id=%d, %s)", key, ids[key], names[key])
 	}
 
 	// 5) explicit overrides win, and an override for a key the upstream never declares also
@@ -320,6 +355,33 @@ func collectModelIDs(v any, out map[string]int) {
 	case []any:
 		for _, sub := range t {
 			collectModelIDs(sub, out)
+		}
+	}
+}
+
+// collectModelTable walks the same config document as collectModelIDs but records what the
+// index needs: the display name for each model_key, and whether the entry is image-capable
+// (`draw: true` marks the base model the web client uses for 图片创作; the `-draw` sibling
+// carries draw:false and is the picker's own entry).
+func collectModelTable(v any, names map[string]string, drawCapable map[string]bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		if key, ok := t["model_key"].(string); ok && key != "" {
+			if n, ok := t["model_name"].(string); ok && n != "" {
+				if _, seen := names[key]; !seen {
+					names[key] = n
+				}
+			}
+			if b, ok := t["draw"].(bool); ok && b {
+				drawCapable[key] = true
+			}
+		}
+		for _, sub := range t {
+			collectModelTable(sub, names, drawCapable)
+		}
+	case []any:
+		for _, sub := range t {
+			collectModelTable(sub, names, drawCapable)
 		}
 	}
 }
