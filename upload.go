@@ -30,16 +30,19 @@ type qrCreateResp struct {
 	ExpiresAt       string `json:"expires_at"`
 }
 
+// qrUploadItem is one authorised upload target inside a qr/authorize response.
+type qrUploadItem struct {
+	ClientAttachmentID string            `json:"client_attachment_id"`
+	UploadItemID       string            `json:"upload_item_id"`
+	UploadURL          string            `json:"upload_url"`
+	ObjectURL          string            `json:"object_url"`
+	Fields             map[string]string `json:"fields"`
+}
+
 type qrAuthorizeResp struct {
-	MobileToken     string `json:"mobile_token"`
-	UploadSessionID string `json:"upload_session_id"`
-	Items           []struct {
-		ClientAttachmentID string            `json:"client_attachment_id"`
-		UploadItemID       string            `json:"upload_item_id"`
-		UploadURL          string            `json:"upload_url"`
-		ObjectURL          string            `json:"object_url"`
-		Fields             map[string]string `json:"fields"`
-	} `json:"items"`
+	MobileToken     string         `json:"mobile_token"`
+	UploadSessionID string         `json:"upload_session_id"`
+	Items           []qrUploadItem `json:"items"`
 }
 
 // uploadImage pushes one picture through the QR upload flow and returns its object URL.
@@ -91,13 +94,7 @@ func (s *Server) uploadImage(ctx context.Context, data []byte, name, contentType
 		return "", fmt.Errorf("qr/authorize(items): %w", err)
 	}
 
-	var item *struct {
-		ClientAttachmentID string            `json:"client_attachment_id"`
-		UploadItemID       string            `json:"upload_item_id"`
-		UploadURL          string            `json:"upload_url"`
-		ObjectURL          string            `json:"object_url"`
-		Fields             map[string]string `json:"fields"`
-	}
+	var item *qrUploadItem
 	for i := range authorized.Items {
 		if authorized.Items[i].ClientAttachmentID == attachmentID || item == nil {
 			item = &authorized.Items[i]

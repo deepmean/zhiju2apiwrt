@@ -37,9 +37,8 @@ func (t *Token) masked() string {
 	return "***"
 }
 
-func (t *Token) state() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// state reports the token's health. Callers must hold t.mu.
+func (t *Token) stateLocked() string {
 	switch {
 	case t.invalid:
 		return "invalid"
@@ -50,6 +49,12 @@ func (t *Token) state() string {
 	default:
 		return "ok"
 	}
+}
+
+func (t *Token) state() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stateLocked()
 }
 
 // Pool holds the tokens and hands them out round-robin.
@@ -224,12 +229,13 @@ func (p *Pool) Pick() *Token {
 	if n == 0 {
 		return nil
 	}
+	now := time.Now()
 	for i := 0; i < n; i++ {
 		t := p.tokens[(p.next+i)%n]
-		if t.invalid {
-			continue
-		}
-		if !t.Exp.IsZero() && time.Now().After(t.Exp) {
+		t.mu.Lock()
+		bad := t.invalid || (!t.Exp.IsZero() && now.After(t.Exp))
+		t.mu.Unlock()
+		if bad {
 			continue
 		}
 		p.next = (p.next + i + 1) % n
@@ -271,7 +277,7 @@ func (p *Pool) statuses() []map[string]any {
 		t.mu.Lock()
 		m := map[string]any{
 			"label":     t.describe(),
-			"state":     t.state(),
+			"state":     t.stateLocked(),
 			"exp":       t.Exp.Format(time.RFC3339),
 			"invalid":   t.invalid,
 			"last_seen": t.lastSeen.Format(time.RFC3339),

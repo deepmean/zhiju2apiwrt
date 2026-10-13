@@ -59,7 +59,9 @@ def main() -> int:
             off = shoff + i * shentsize
             return struct.unpack("<IIIIIIIIII" if little else ">IIIIIIIIII", data[off:off + 40])
 
-        _, _, _, _, _, _, _, _, strtab_off, _ = sh(shstrndx)
+        # ELF32 section header: name, type, flags, addr, offset, size, link, info,
+        # addralign, entsize — the string table's file offset is index 4.
+        _, _, _, _, strtab_off, _, _, _, _, _ = sh(shstrndx)
         sections = [sh(i) for i in range(shnum)]
         for s in sections:
             nm_off = s[0]
@@ -67,7 +69,9 @@ def main() -> int:
             sname = data[strtab_off + nm_off:end].decode("ascii", "replace")
             if sname == ".MIPS.abiflags":
                 s_off = s[4]
-                fp_abi = data[s_off + 12]
+                # .MIPS.abiflags: version(2) isa_level(1) isa_rev(1) gpr_size(1)
+                # cpr1_size(1) cpr2_size(1) fp_abi(1) ...
+                fp_abi = data[s_off + 7]
                 print(f"  .MIPS.abiflags fp_abi={fp_abi}")
                 if gomips == "softfloat" and fp_abi != EF_MIPS_ABI_FLOAT_SOFT:
                     fail(f"expected soft float (fp_abi=3), got {fp_abi} — this binary would crash on a FPU-less router")

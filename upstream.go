@@ -80,14 +80,14 @@ func NewClient(cfg *Config, pool *Pool) *Client {
 		cfg:       cfg,
 		http:      &http.Client{Transport: tr, Timeout: 0},
 		pool:      pool,
-		chatGate:  make(chan struct{}, max(1, cfg.ChatMaxConcurrent)),
-		imageGate: make(chan struct{}, max(1, cfg.ImageMaxConcurrent)),
+		chatGate:  make(chan struct{}, maxInt(1, cfg.ChatMaxConcurrent)),
+		imageGate: make(chan struct{}, maxInt(1, cfg.ImageMaxConcurrent)),
 	}
 	c.chatVer.Store(cfg.ChatVer)
 	return c
 }
 
-func max(a, b int) int {
+func maxInt(a, b int) int {
 	if a > b {
 		return a
 	}
