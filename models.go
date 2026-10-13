@@ -115,11 +115,13 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 	ids := map[string]int{}
 	names := map[string]string{}
 	drawCapable := map[string]bool{}
+	pickerKeys := map[string]string{}
+	pickerNames := map[string]string{}
 	// 1) The web client's own config carries the full model table (model_key + model_id)
 	// for every family, which is the freshest and most complete source there is.
 	if cfgMap, err := cat.c.CfgList(ctx); err == nil {
 		collectModelIDs(cfgMap, ids)
-		collectModelTable(cfgMap, names, drawCapable)
+		collectModelTable(cfgMap, names, drawCapable, pickerKeys, pickerNames)
 	} else {
 		logf("WARN", "cfg/list unavailable for model ids: %v", err)
 	}
@@ -213,14 +215,20 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 	}
 
 	// 4b) cfg/list also knows image-capable models the snapshot's draw/repair lists omit —
-	//     every 4K tier, for instance: the snapshot carries only the 2K variants of 香蕉 Pro,
-	//     香蕉 2 and 升智-2.5, so nothing downstream could ever select 4K even though the
-	//     web client offers it. cfg/list flags them with draw:true.
+	//     the 4K tiers, for instance: the snapshot carries only the 2K variants of 香蕉 Pro
+	//     and 香蕉 2, so nothing downstream could select 4K even though the site offers it.
+	//
+	//     The test is whether the site's own 图片创作 picker carries the model, and that
+	//     picker is cfg/list's models.draw list — an entry there is named `<key>-draw`. Using
+	//     `draw: true` alone is too loose: it also matches 全灵-2.5创作版/编辑版, which the
+	//     picker does not list at any tier (no gptimage25*-draw entry exists), so they would
+	//     have shown up with a brand name the operator does not recognise anywhere on the
+	//     site. Requiring the picker sibling keeps 香蕉 Pro 4K and 香蕉 2 4K and drops those.
 	//
 	//     They join the repair family, which is the chain the web client uses for them (a
 	//     real 香蕉 Pro 2K session sends model_code=nanobanana2 with the id cfg/list lists).
 	for key := range drawCapable {
-		if key == "" {
+		if key == "" || !pickerKeys[key+"-draw"] {
 			continue
 		}
 		if _, ok := ids[key]; !ok {
@@ -237,11 +245,17 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 		if already {
 			continue
 		}
+		// Prefer the picker sibling's name: that is the string the operator sees on the
+		// site, and cfg/list sometimes brands the same model differently elsewhere.
+		name := pickerNames[key+"-draw"]
+		if name == "" {
+			name = names[key]
+		}
 		snap.Models["repair"] = append(snap.Models["repair"], Model{
-			Key: key, Name: names[key], Type: "repair",
-			Desc: "image-capable model from cfg/list (absent from the snapshot's draw/repair lists)",
+			Key: key, Name: name, Type: "repair",
+			Desc: "image model from cfg/list, present in the site's 图片创作 picker",
 		})
-		logf("INFO", "cfg/list adds an image model the snapshot omits: %s (id=%d, %s)", key, ids[key], names[key])
+		logf("INFO", "cfg/list adds an image model the snapshot omits: %s (id=%d, %s)", key, ids[key], name)
 	}
 
 	// 5) explicit overrides win, and an override for a key the upstream never declares also
@@ -360,28 +374,40 @@ func collectModelIDs(v any, out map[string]int) {
 }
 
 // collectModelTable walks the same config document as collectModelIDs but records what the
-// index needs: the display name for each model_key, and whether the entry is image-capable
-// (`draw: true` marks the base model the web client uses for 图片创作; the `-draw` sibling
-// carries draw:false and is the picker's own entry).
-func collectModelTable(v any, names map[string]string, drawCapable map[string]bool) {
+// index needs: the display name for each model_key, whether the entry is image-capable
+// (`draw: true` marks a model the web client can create images with), and which models the
+// site's 图片创作 picker actually offers.
+//
+// The picker is the draw family: an entry there is named `<key>-draw` and carries
+// model_type "draw". That distinction matters — `draw: true` alone is broader than the
+// picker, and treating it as "the site offers this" put models on the list that the site
+// does not show at all.
+func collectModelTable(v any, names map[string]string, drawCapable map[string]bool, pickerKeys, pickerNames map[string]string) {
 	switch t := v.(type) {
 	case map[string]any:
 		if key, ok := t["model_key"].(string); ok && key != "" {
-			if n, ok := t["model_name"].(string); ok && n != "" {
+			name, _ := t["model_name"].(string)
+			if name != "" {
 				if _, seen := names[key]; !seen {
-					names[key] = n
+					names[key] = name
 				}
 			}
 			if b, ok := t["draw"].(bool); ok && b {
 				drawCapable[key] = true
 			}
+			if ty, ok := t["model_type"].(string); ok && ty == "draw" {
+				pickerKeys[key] = key
+				if name != "" {
+					pickerNames[key] = name
+				}
+			}
 		}
 		for _, sub := range t {
-			collectModelTable(sub, names, drawCapable)
+			collectModelTable(sub, names, drawCapable, pickerKeys, pickerNames)
 		}
 	case []any:
 		for _, sub := range t {
-			collectModelTable(sub, names, drawCapable)
+			collectModelTable(sub, names, drawCapable, pickerKeys, pickerNames)
 		}
 	}
 }
