@@ -212,12 +212,17 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 	// 5) explicit overrides win, and an override for a key the upstream never declares also
 	//    *creates* that model.
 	//
-	//    banana21 (香蕉2.1) is why this exists. The web client sends it as model_code with
-	//    model_id 0, and it appears in none of the declaration sources — not cfg/list, not
-	//    repair/params, not the account quota list, not repair/home_v2 — so no
-	//    declaration-driven source can ever surface it, and the panel simply never showed
-	//    it. It is a real model (the operator generated an image with it, billed 268 灵力
-	//    as "使用香蕉2.1修图") reached through the same repair chain as everything else.
+	//    banana21 (香蕉2.1) is why this exists. The snapshot does list it — in both the draw
+	//    and repair families, named 香蕉2.1 — but with no model_id at all, and the web
+	//    client sends it as model_code with model_id 0. So there is no numeric id anywhere
+	//    to resolve, and the old "id must be > 0" rule dropped it silently: the model was
+	//    in the catalog and still absent from /v1/models and the panel. It is a real model
+	//    (the operator generated an image with it, billed 268 灵力 as "使用香蕉2.1修图"),
+	//    reached through the same repair chain as everything else.
+	//
+	//    A models.map line therefore does two jobs: it pins ids for known models, and for a
+	//    model with no id at all it both supplies the id and, if no list carries the key,
+	//    creates the entry.
 	known := map[string]bool{}
 	for _, group := range [][]Model{snap.Models["text"], snap.Models["draw"], snap.Models["repair"]} {
 		for _, m := range group {

@@ -254,7 +254,9 @@ function renderAccount(a) {
 }
 
 function sizeCell(m) {
-  if (!m.aspect_ratios) return '<span class="sub">—</span>';
+  // No declaration at all is different from "no ratios": the upstream lists the model
+  // (banana21 / 香蕉2.1) but publishes no parameters for it, so say that instead of a dash.
+  if (!m.aspect_ratios) return '<span class="sub">上游未声明参数</span>';
   var ratios = (m.aspect_ratios || []).filter(function (r) { return r; });
   if (!ratios.length) return '<span class="sub">仅自动</span>';
   var tiers = (m.image_sizes || []).join('/') || '-';
@@ -528,13 +530,28 @@ $('gatekey').onkeydown = function (e) { if (e.key === 'Enter') $('gatesave').onc
 $('reload').onclick = refresh;
 $('onlyimg').onchange = renderModels;
 $('onlyfree').onchange = renderModels;
+// A model the upstream declares no parameters for still needs a table in the plugin, or the
+// settings field cannot be filled at all. banana21 (香蕉2.1) is the case that exists: it is
+// absent from repair/params, so it has no aspect_ratio/image_size declaration — yet a real
+// session ran it with image_size 2K and no explicit ratio. Offer the ratios the plugin's own
+// default uses, at that tier, and say so rather than pretending it is declared.
+function fallbackSizes() {
+  return {
+    '1:1': { '2K': '2048x2048' },
+    '3:2': { '2K': '2048x1366' },
+    '2:3': { '2K': '1366x2048' }
+  };
+}
 function selectedModel() {
   var id = state.selected;
   if (!id) { say('先在表格里点一行选择模型', 'warn'); return null; }
   var m = null;
   state.models.forEach(function (x) { if (x.id === id) m = x; });
   if (!m) { say('找不到该模型', 'bad'); return null; }
-  if (!m.size_table) { say('该模型没有尺寸表（不是图片模型，或上游未声明分辨率档位）', 'warn'); return null; }
+  if (!m.size_table) {
+    // Not an error: the upstream simply declares nothing for it.
+    return Object.assign({}, m, { size_table: fallbackSizes(), size_table_guess: true });
+  }
   return m;
 }
 function put(text, note) {
@@ -564,12 +581,14 @@ function pluginConfig(m) {
 $('copyall').onclick = function () {
   var m = selectedModel(); if (!m) return;
   put(JSON.stringify(pluginConfig(m), null, 2),
-    '已复制完整插件配置 —— 粘到 cordis.patch.yml 的 config:（JSON 是合法 YAML），或照着填 GUI');
+    '已复制完整插件配置 —— 粘到 cordis.patch.yml 的 config:（JSON 是合法 YAML），或照着填 GUI' +
+    (m.size_table_guess ? '（分辨率表是按该模型实测用过的 2K 档推的兜底值）' : ''));
 };
 $('copysizes').onclick = function () {
   var m = selectedModel(); if (!m) return;
   put(JSON.stringify(m.size_table, null, 2),
-    '已复制 ' + m.id + ' 的分辨率表 —— 只粘 GUI 的「自定义分辨率表（JSON）」');
+    '已复制 ' + m.id + ' 的分辨率表 —— 只粘 GUI 的「自定义分辨率表（JSON）」' +
+    (m.size_table_guess ? '（注意：上游没声明这个模型的参数，表是按它实测用过的 2K 档推的）' : ''));
 };
 $('copyyaml').onclick = function () {
   var m = selectedModel(); if (!m) return;

@@ -629,6 +629,26 @@ API 调用会在账号里留下会话（对话、生图、MJ）。删它们**不
 | 报价与实际扣费不一致 | 见 §10.1 |
 | MJ 无灵力价目 | `getpolicy` 恒回 `ret=500`，但它是账号上最贵的一档（按次结算），默认禁用 |
 
+### 有些模型没有数字 id（`banana21` / 香蕉2.1）
+
+上游 snapshot 会声明一个模型却**不给 `model_id`**，网页端就发 `model_code=banana21` + `model_id=0`：
+
+```json
+{"model_key":"banana21","model_name":"香蕉2.1","model_type":"repair"}   // 没有 model_id 字段
+```
+
+而 `cfg/list`、`repair/params`、账号额度列表、`repair/home_v2` 里**都没有它**。网关原来要求
+`id > 0` 才算解析成功，于是它进了目录却被静默丢弃 —— 面板里看不到，`/v1/models` 里也没有。
+
+在 `models.map` 里写一行即可（id 填 `0`，与网页端一致）：
+
+```
+banana21=0     # 香蕉2.1，268 灵力/次（计费名"使用香蕉2.1修图"）
+```
+
+之后它以 `banana21-image` / `banana21-image-edit` 出现。这类"无 id 模型"只能手工登记，
+因为没有任何一处声明能提供它的 id。
+
 ---
 
 ## 13. 排障
