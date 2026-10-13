@@ -84,3 +84,10 @@ HEARTBEAT_INTERVAL=30m
 TOKEN_RELOAD_INTERVAL=5s
 TOKEN_EXPIRY_WARN_DAYS=14
 MODEL_CACHE_TTL=30m
+
+# Renewal without JSON: during a pending login (after POST /admin/login/sms) the gateway
+# watches this file, and the first non-empty content is consumed as the verification code
+# and deleted. So renewing is:
+#     ssh router 'echo 123456 > /tmp/zhiju-sms-code'
+# or an SMS-forwarding app on the phone writing it over ssh. Empty disables the watcher.
+SMS_CODE_FILE=/tmp/zhiju-sms-code

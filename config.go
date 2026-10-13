@@ -59,6 +59,10 @@ type Config struct {
 	// How long before a token's exp the heartbeat starts warning about it. There is no
 	// renewal upstream, so expiry is a deadline the operator has to meet.
 	TokenExpiryWarnDays int
+	// A file the verification code can be dropped into during a pending login, so the
+	// code can arrive from an SMS forwarder or a single ssh command instead of a JSON
+	// request. Empty disables the watcher.
+	SMSCodeFile string
 
 	MaxBodyBytes   int64
 	MaxImageBytes  int64
@@ -179,6 +183,7 @@ func LoadConfig() *Config {
 		TokenReloadEvery:  envDur("TOKEN_RELOAD_INTERVAL", 5*time.Second),
 		ModelCacheTTL:     envDur("MODEL_CACHE_TTL", 30*time.Minute),
 		TokenExpiryWarnDays: envInt("TOKEN_EXPIRY_WARN_DAYS", 14),
+		SMSCodeFile:         envStr("SMS_CODE_FILE", "/tmp/zhiju-sms-code"),
 
 		MaxBodyBytes:   int64(envInt("MAX_BODY_BYTES", 8<<20)),
 		MaxImageBytes:  int64(envInt("MAX_IMAGE_BYTES", 8<<20)),

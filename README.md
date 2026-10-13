@@ -163,27 +163,42 @@ python3 tools/zhiju_token_sync.py --gateway http://192.168.26.1:8080 --key sk-..
 ```
 
 4. **路由器自己完成登录**：令牌彻底失效时，不必改文件、不必重启，网关可以自己走完
-   手机号登录流程并立刻启用新令牌：
+   手机号登录流程并立刻启用新令牌。**验证码有三条回填通道**，按自动化程度从高到低：
 
 ```sh
-# ① 让上游发验证码到你手机
+# ① 让上游发验证码（会记住这个号码，10 分钟内有效）
 curl -X POST http://192.168.26.1:8080/admin/login/sms \
   -H 'Authorization: Bearer sk-...' -H 'Content-Type: application/json' \
   -d '{"phone":"136xxxxxxxx"}'
 
-# ② 带上验证码登录；网关存下新令牌并立即使用（会自动刷新目录与价格缓存）
+# ② 只回填验证码（给手机上的短信转发 App 用：它只拿得到验证码，拿不到号码）
+curl -X POST http://192.168.26.1:8080/admin/login/code \
+  -H 'Authorization: Bearer sk-...' -H 'Content-Type: application/json' \
+  -d '{"code":"123456"}'
+
+# ③ 或者写文件（连 JSON 都不用；网关只在有待处理登录时读，读完即删）
+ssh router 'echo 123456 > /tmp/zhiju-sms-code'
+
+# ④ 号码+验证码一起给（不依赖 ①，可独立使用）
 curl -X POST http://192.168.26.1:8080/admin/login \
   -H 'Authorization: Bearer sk-...' -H 'Content-Type: application/json' \
   -d '{"phone":"136xxxxxxxx","code":"123456"}'
 
-# 随时查当前账号状态：余额、令牌健康、协议版本
+# 随时查当前账号状态：余额、令牌健康、剩余天数、协议版本
 curl http://192.168.26.1:8080/admin/session -H 'Authorization: Bearer sk-...'
 ```
 
+- 通道 ② 是给 **Android 短信转发 App**（SmsForwarder 之类）准备的：App 里配一条
+  Webhook 指向 `/admin/login/code`，带 `Authorization` 头，正文 `{"code":"{{短信内容}}"}`，
+  这样**验证码一到手机就自动完成续期**，全程无人值守；
+- 通道 ③ 适合你人在 SSH 里的时候，一条命令搞定；
+- 所有 `/admin/login*` 都在 API Key 之后，号码在日志与响应里只显示 `136****2016`。
+
 多账号就往 `tokens.txt` 里多写几行，网关轮询使用；某个号被上游拒绝会自动跳过。
 
-> 老实说：**路由器造不出新令牌**——要短信验证码，这一步必须有人参与（或由电脑侧常驻脚本代劳）。
-> 本项目做的是让"失效"和"续期"都是可观测、可一键完成的，而不是静默地全站 401。
+> 老实说：**路由器造不出新令牌**——要短信验证码，这一步必须有人参与（或由电脑侧常驻脚本、
+> 手机短信转发 App 代劳）。本项目做的是让"失效"和"续期"都是可观测、可一键完成的，
+> 而不是静默地全站 401。到期前 14 天起，日志每天一条预警。
 
 ---
 

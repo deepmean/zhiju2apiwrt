@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -58,6 +59,11 @@ type Server struct {
 	c    *Client
 	pool *Pool
 	cat  *Catalog
+
+	// A pending SMS login: which phone a code was requested for, so the code can be
+	// handed back on its own (from a forwarder, or a file) without repeating the number.
+	pendMu sync.Mutex
+	pend   *pendingLogin
 }
 
 func main() {
@@ -123,6 +129,8 @@ func main() {
 
 	stop := make(chan struct{})
 	go pool.StartMaintenance(client, stop)
+	// Accept a verification code dropped into a file, so renewing needs no JSON at all.
+	go srv.watchSMSCodeFile(stop)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", srv.auth(srv.handleModels))
@@ -133,9 +141,20 @@ func main() {
 	mux.HandleFunc("/v1/images/generations", srv.auth(srv.handleImageGenerations))
 	mux.HandleFunc("/v1/images/edits", srv.auth(srv.handleImageEdits))
 	mux.HandleFunc("/health", srv.handleHealth)
+	mux.HandleFunc("/panel", srv.handlePanel)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Anything that is not one of the API routes gets the panel, so opening the
+		// router's IP in a browser lands somewhere useful.
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/panel", http.StatusFound)
+	})
 	mux.HandleFunc("/admin/tokens", srv.auth(srv.handleAdminTokens))
 	mux.HandleFunc("/admin/session", srv.auth(srv.handleSession))
 	mux.HandleFunc("/admin/login/sms", srv.auth(srv.handleLoginSMS))
+	mux.HandleFunc("/admin/login/code", srv.auth(srv.handleLoginCode))
 	mux.HandleFunc("/admin/login", srv.auth(srv.handleLogin))
 
 	httpSrv := &http.Server{
