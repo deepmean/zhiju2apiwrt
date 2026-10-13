@@ -38,7 +38,20 @@ jobs:
       - name: build (host)
         run: go build -trimpath -o /tmp/zhiju2api .
       - name: test
-        run: go test ./...
+        run: |
+          set +e
+          go test ./... 2>&1 | tee /tmp/gotest.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != "0" ]; then
+            # Surface the failure through the annotations API. Job logs need a token this
+            # project does not have, so a bare "exit code 1" is otherwise unreadable from
+            # outside — which cost two round trips already.
+            echo "::error title=go test failed::see the following annotations"
+            tail -n 60 /tmp/gotest.log | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error title=go test::$line"
+            done
+            exit "$code"
+          fi
 
   build:
     needs: test
