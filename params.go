@@ -29,6 +29,69 @@ type ModelParams struct {
 	DefaultSize   string       `json:"default_image_size"`
 	PromptLimit   int          `json:"prompt_limit,omitempty"`
 	Extras        []ExtraParam `json:"extra_params,omitempty"`
+	// SizeTable is ratio -> tier -> nominal pixels. The upstream declares ratios and
+	// tiers but never pixels, so these are derived (long edge = tier x 1024). They are
+	// guidance for clients that speak pixels; the gateway snaps whatever it receives onto
+	// the nearest declared ratio anyway, so an approximation is safe here.
+	SizeTable map[string]map[string]string `json:"size_table,omitempty"`
+}
+
+// tierPixels turns a resolution tier name into its long edge in pixels.
+func tierPixels(tier string) int {
+	t := strings.ToUpper(strings.TrimSpace(tier))
+	t = strings.TrimSuffix(t, "K")
+	if t == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(t)
+	if err != nil || n <= 0 || n > 16 {
+		return 0
+	}
+	return n * 1024
+}
+
+// buildSizeTable derives the pixel dimensions for every declared ratio at every declared
+// tier. Long edge is held at the tier size, the other edge follows the ratio.
+func buildSizeTable(p *ModelParams) map[string]map[string]string {
+	if len(p.ImageSizes) == 0 {
+		return nil
+	}
+	out := map[string]map[string]string{}
+	for _, ratio := range p.AspectRatios {
+		rv, ok := ratioValue(ratio)
+		if !ok {
+			continue // "" / "auto": no fixed shape
+		}
+		row := map[string]string{}
+		for _, tier := range p.ImageSizes {
+			long := tierPixels(tier)
+			if long == 0 {
+				continue
+			}
+			w, h := long, long
+			if rv >= 1 {
+				h = evenInt(math.Round(float64(long) / rv))
+			} else {
+				w = evenInt(math.Round(float64(long) * rv))
+			}
+			row[tier] = fmt.Sprintf("%dx%d", w, h)
+		}
+		if len(row) > 0 {
+			out[ratio] = row
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// evenInt keeps derived dimensions even, which is what image models expect.
+func evenInt(n int) int {
+	if n%2 != 0 {
+		return n + 1
+	}
+	return n
 }
 
 // ExtraParam is a Midjourney knob (stylize, chaos, quality, seed, ...) with its range
@@ -191,6 +254,7 @@ func (c *Client) refreshParams(ctx context.Context) error {
 				}
 			}
 		}
+		p.SizeTable = buildSizeTable(p)
 		out[m.ModelKey] = p
 	}
 

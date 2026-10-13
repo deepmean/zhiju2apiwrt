@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -240,6 +241,164 @@ func (s *Server) peekPending() (string, bool) {
 		return "", false
 	}
 	return s.pend.phone, true
+}
+
+// handlePush is the endpoint the panel's bookmarklet targets: the token arrives as the
+// raw request body, and the API key may come from ?key= because a cross-origin POST from
+// the site's page cannot set an Authorization header without a CORS preflight.
+//
+//	POST /admin/push?key=sk-...      body: <jwt>
+//
+// It is deliberately tolerant (GET with ?token= works too) and answers with permissive
+// CORS headers, so the caller can read the result when the browser allows it.
+func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("access-control-allow-origin", "*")
+	w.Header().Set("access-control-allow-headers", "authorization,content-type")
+	w.Header().Set("access-control-allow-methods", "GET,POST,OPTIONS")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Key: header first (normal callers), then ?key= (bookmarklet from another origin).
+	if len(s.cfg.APIKeys) > 0 {
+		key := bearer(r)
+		if key == "" {
+			key = r.URL.Query().Get("key")
+		}
+		ok := false
+		for _, k := range s.cfg.APIKeys {
+			if key == k {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			writeOpenAIError(w, http.StatusUnauthorized, "invalid_request_error", "invalid API key")
+			return
+		}
+	}
+
+	var raw []byte
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		b, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+		if err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		raw = b
+	}
+	tokens := extractTokens(raw)
+	if v := strings.TrimSpace(r.URL.Query().Get("token")); v != "" {
+		tokens = append(tokens, v)
+	}
+	if len(tokens) == 0 {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "send the JWT as the body, or as ?token=")
+		return
+	}
+
+	added, err := s.pool.Add(tokens...)
+	if err != nil {
+		logf("WARN", "pushed token could not be persisted: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	_ = s.cat.Refresh(ctx, true)
+
+	logf("INFO", "token pushed via /admin/push: %d added, %d total", added, len(s.pool.All()))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":          true,
+		"added":       added,
+		"token_count": len(s.pool.All()),
+		"tokens":      s.pool.statuses(),
+	})
+}
+
+// handleAccount reports the account behind the current token: identity, plan, balance and
+// the per-model quota the account catalog carries. This is what the panel shows, so the
+// operator can see which account is actually being spent.
+//
+//	GET /admin/account
+func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
+	var acct struct {
+		Nick      string `json:"nick"`
+		MID       int64  `json:"mid"`
+		Phone     string `json:"phone"`
+		Platform  string `json:"platform"`
+		Channel   string `json:"channel"`
+		UserType  int    `json:"user_type"`
+		IsNewVIP  bool   `json:"is_new_vip"`
+		Integral  struct {
+			Balance int `json:"balance"`
+		} `json:"integral"`
+		VipItem struct {
+			VIPName       string `json:"vip_name"`
+			VIPLevelName  string `json:"vip_level_name"`
+			VIPExpireName string `json:"vip_expire_name"`
+			VIPKey        string `json:"vip_key"`
+		} `json:"vip_item"`
+		Subscriptions struct {
+			InSubscription     bool `json:"in_subscription"`
+			SubscriptionStatus int  `json:"subscription_status"`
+			ActivePlans        int  `json:"active_plans"`
+			ModelsRemain       []struct {
+				ModelName   string `json:"model_name"`
+				ModelID     int    `json:"model_id"`
+				RemainCount int    `json:"remain_count"`
+			} `json:"models_remain"`
+		} `json:"subscriptions"`
+	}
+	if err := s.c.call(ctx, kindV1, "/v1/account/get", map[string]any{}, &acct); err != nil {
+		s.writeUpstreamErr(w, err)
+		return
+	}
+
+	unlimited, exhausted := 0, 0
+	type quota struct {
+		Name   string `json:"name"`
+		ID     int    `json:"id"`
+		Remain int    `json:"remain"`
+	}
+	quotas := make([]quota, 0, len(acct.Subscriptions.ModelsRemain))
+	for _, m := range acct.Subscriptions.ModelsRemain {
+		switch {
+		case m.RemainCount < 0:
+			unlimited++
+		case m.RemainCount == 0:
+			exhausted++
+		}
+		quotas = append(quotas, quota{Name: m.ModelName, ID: m.ModelID, Remain: m.RemainCount})
+	}
+
+	out := map[string]any{
+		"nick":                acct.Nick,
+		"mid":                 acct.MID,
+		"phone":               maskPhone(acct.Phone),
+		"platform":            acct.Platform,
+		"channel":             acct.Channel,
+		"user_type":           acct.UserType,
+		"is_new_vip":          acct.IsNewVIP,
+		"vip_name":            acct.VipItem.VIPName,
+		"vip_level":           acct.VipItem.VIPLevelName,
+		"vip_expire":          acct.VipItem.VIPExpireName,
+		"vip_key":             acct.VipItem.VIPKey,
+		"in_subscription":     acct.Subscriptions.InSubscription,
+		"subscription_status": acct.Subscriptions.SubscriptionStatus,
+		"active_plans":        acct.Subscriptions.ActivePlans,
+		"balance":             acct.Integral.Balance,
+		"models_total":        len(quotas),
+		"models_unlimited":    unlimited,
+		"models_exhausted":    exhausted,
+		"quotas":              quotas,
+	}
+	if bal, expire, err := s.c.Balance(ctx); err == nil {
+		out["balance"] = bal
+		out["balance_expire"] = expire
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // maskPhone keeps the number out of logs and responses beyond its last four digits.

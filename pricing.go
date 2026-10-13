@@ -201,6 +201,9 @@ func (s *Server) modelList(ctx context.Context, withPrices bool) []map[string]an
 		if e.Name != "" {
 			entry["name"] = e.Name
 		}
+		if e.Desc != "" {
+			entry["description"] = e.Desc
+		}
 		if e.Key != "" {
 			entry["upstream_key"] = e.Key
 		}
@@ -213,6 +216,16 @@ func (s *Server) modelList(ctx context.Context, withPrices bool) []map[string]an
 		if e.Capability != "" {
 			entry["capability"] = e.Capability
 		}
+		// Text models: what the upstream says they can hold and whether they think.
+		if e.ContextWindow > 0 {
+			entry["context_window"] = e.ContextWindow
+		}
+		if e.MaxTokens > 0 {
+			entry["max_tokens"] = e.MaxTokens
+		}
+		if e.HasThink {
+			entry["think"] = e.Think
+		}
 		if withPrices && e.Key != "" {
 			contentType := "text"
 			if e.Capability != "chat" {
@@ -222,6 +235,9 @@ func (s *Server) modelList(ctx context.Context, withPrices bool) []map[string]an
 				entry["change_num"] = p.ChangeNum
 				entry["effective_change_num"] = p.Effective
 				entry["price_available"] = true
+				if p.PolicyName != "" {
+					entry["price_policy"] = p.PolicyName
+				}
 			} else {
 				// Not every model has a 灵力 price row: quota-billed ones (Midjourney is
 				// remain_count=-1) make the billing module answer with a generic error.
@@ -243,6 +259,12 @@ func (s *Server) modelList(ctx context.Context, withPrices bool) []map[string]an
 				entry["default_aspect_ratio"] = p.DefaultAspect
 				entry["image_sizes"] = p.ImageSizes
 				entry["default_image_size"] = p.DefaultSize
+				if p.SizeTable != nil {
+					entry["size_table"] = p.SizeTable
+				}
+				if len(p.Extras) > 0 {
+					entry["extra_params"] = p.Extras
+				}
 				if p.PromptLimit > 0 {
 					entry["prompt_limit"] = p.PromptLimit
 				}

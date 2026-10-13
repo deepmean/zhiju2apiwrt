@@ -152,6 +152,8 @@ func main() {
 		http.Redirect(w, r, "/panel", http.StatusFound)
 	})
 	mux.HandleFunc("/admin/tokens", srv.auth(srv.handleAdminTokens))
+	mux.HandleFunc("/admin/account", srv.auth(srv.handleAccount))
+	mux.HandleFunc("/admin/push", srv.handlePush) // key may arrive in ?key= (cross-origin)
 	mux.HandleFunc("/admin/session", srv.auth(srv.handleSession))
 	mux.HandleFunc("/admin/login/sms", srv.auth(srv.handleLoginSMS))
 	mux.HandleFunc("/admin/login/code", srv.auth(srv.handleLoginCode))

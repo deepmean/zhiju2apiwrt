@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"sort"
@@ -36,6 +37,7 @@ type Resolved struct {
 	Key        string // upstream model_key, e.g. gptimage2
 	ID         int    // numeric model_id the image routes require
 	Name       string // upstream display name, e.g. 升智-2
+	Desc       string // upstream one-line description
 	Family     string // upstream model_type: text | draw | repair
 	Capability string // chat | image | image-edit (what the -suffix selects)
 }
@@ -237,7 +239,7 @@ func buildIndex(text, draw, repair []Model, ids map[string]int) map[string]Resol
 	for _, m := range text {
 		idx[m.Key] = Resolved{
 			OpenAI: m.Key, Kind: "chat", Key: m.Key,
-			Name: m.Name, Family: m.Type, Capability: "chat",
+			Name: m.Name, Desc: m.Desc, Family: m.Type, Capability: "chat",
 		}
 	}
 	addImage := func(m Model, kind string) {
@@ -251,11 +253,11 @@ func buildIndex(text, draw, repair []Model, ids map[string]int) map[string]Resol
 		}
 		idx[m.Key+"-image"] = Resolved{
 			OpenAI: m.Key + "-image", Kind: kind, Key: m.Key, ID: id,
-			Name: m.Name, Family: family, Capability: "image",
+			Name: m.Name, Desc: m.Desc, Family: family, Capability: "image",
 		}
 		idx[m.Key+"-image-edit"] = Resolved{
 			OpenAI: m.Key + "-image-edit", Kind: kind, Key: m.Key, ID: id,
-			Name: m.Name, Family: family, Capability: "image-edit",
+			Name: m.Name, Desc: m.Desc, Family: family, Capability: "image-edit",
 		}
 	}
 	for _, m := range draw {
@@ -405,15 +407,52 @@ func (cat *Catalog) OpenAIList() []map[string]any {
 }
 
 // IndexEntry is one OpenAI-facing model name with everything needed to display it:
-// the real upstream name, the numeric id, and what the id selects.
+// the real upstream name, the numeric id, what the id selects, and — for text models —
+// the context window the upstream advertises.
 type IndexEntry struct {
 	OpenAI     string
 	Key        string
 	Name       string
+	Desc       string
 	Family     string
 	Capability string
 	ID         int
 	Unlimited  bool
+
+	ContextWindow int
+	MaxTokens     int
+	Think         bool
+	HasThink      bool
+}
+
+// capsInt reads a numeric capability, which the upstream may send as a number or string.
+func capsInt(caps map[string]any, key string) int {
+	if caps == nil {
+		return 0
+	}
+	switch v := caps[key].(type) {
+	case float64:
+		return int(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
+	case string:
+		var n int
+		_, _ = fmt.Sscanf(strings.TrimSpace(v), "%d", &n)
+		return n
+	}
+	return 0
+}
+
+func capsBool(caps map[string]any, key string) (bool, bool) {
+	if caps == nil {
+		return false, false
+	}
+	if v, ok := caps[key].(bool); ok {
+		return v, true
+	}
+	return false, false
 }
 
 // Index returns every OpenAI-facing name, sorted, with its upstream identity.
@@ -421,17 +460,32 @@ func (cat *Catalog) Index() []IndexEntry {
 	cat.mu.RLock()
 	defer cat.mu.RUnlock()
 
+	// Text models carry their context window in capacities.
+	caps := map[string]map[string]any{}
+	for _, m := range cat.text {
+		caps[m.Key] = m.Caps
+	}
+
 	out := make([]IndexEntry, 0, len(cat.byName))
 	for openai, r := range cat.byName {
-		out = append(out, IndexEntry{
+		e := IndexEntry{
 			OpenAI:     openai,
 			Key:        r.Key,
 			Name:       r.Name,
+			Desc:       r.Desc,
 			Family:     r.Family,
 			Capability: r.Capability,
 			ID:         r.ID,
 			Unlimited:  cat.isUnlimitedLocked(r.Key),
-		})
+		}
+		if c, ok := caps[r.Key]; ok {
+			e.ContextWindow = capsInt(c, "max_context")
+			e.MaxTokens = capsInt(c, "max_tokens")
+			if b, ok := capsBool(c, "think"); ok {
+				e.Think, e.HasThink = b, true
+			}
+		}
+		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].OpenAI < out[j].OpenAI })
 	return out
