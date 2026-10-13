@@ -70,9 +70,9 @@ func buildSizeTable(p *ModelParams) map[string]map[string]string {
 			}
 			w, h := long, long
 			if rv >= 1 {
-				h = evenInt(math.Round(float64(long) / rv))
+				h = evenInt(int(math.Round(float64(long) / rv)))
 			} else {
-				w = evenInt(math.Round(float64(long) * rv))
+				w = evenInt(int(math.Round(float64(long) * rv)))
 			}
 			row[tier] = fmt.Sprintf("%dx%d", w, h)
 		}
