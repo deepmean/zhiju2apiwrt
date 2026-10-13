@@ -145,6 +145,20 @@ th.nowrap,td.nowrap{white-space:nowrap}
 </section>
 
 <section>
+  <h3>云端记录（本网关创建的会话）</h3>
+  <div class="hint">只列出<b>网关自己创建的</b>上游会话（API 调用留下的记录）。你在网页端自己的对话不在这里，也不会被删。</div>
+  <div class="row" style="margin:8px 0">
+    <div style="flex:0 0 auto"><button id="recload" class="ghost">刷新列表</button></div>
+    <div style="flex:0 0 auto"><button id="recdel">删除选中</button></div>
+    <div style="flex:0 0 auto"><button id="recdelall" class="ghost">删除全部</button></div>
+    <div style="flex:0 0 auto"><label style="margin:0"><input type="checkbox" id="recshowdeleted" style="width:auto"> 含已删</label></div>
+    <div style="flex:0 0 auto"><label style="margin:0"><input type="checkbox" id="recupstream" style="width:auto"> 含上游列表（清理旧记录用）</label></div>
+  </div>
+  <div class="scroll" style="max-height:300px"><table id="records"></table></div>
+  <div id="recmsg" class="hint"></div>
+</section>
+
+<section>
   <h3>模型</h3>
   <div class="row" style="margin-bottom:10px">
     <div style="flex:0 0 auto"><label style="margin:0"><input type="checkbox" id="onlyimg" checked style="width:auto"> 只看图片模型</label></div>
@@ -257,7 +271,7 @@ function renderModels() {
     if (m.upstream_id) note.push('id ' + m.upstream_id);
     if (m.price_policy) note.push(esc(m.price_policy));
     if (m.price_available === false && m.price_note) note.push('<span class="warn">' + esc(m.price_note) + '</span>');
-    if (m.prompt_limit) note.push('提示词 ≤' + m.prompt_limit);
+    if (m.prompt_limit) note.push('提示词声明 ≤' + m.prompt_limit + (m.prompt_limit_enforced ? '（网关强制）' : '<span class="sub"> 上游不强制</span>'));
     rows.push('<tr data-id="' + esc(m.id) + '"><td class="mono nowrap">' + esc(m.id) + '</td><td>' + name + '</td>' +
       '<td class="nowrap">' + esc(m.capability || '') + '</td><td class="num">' + (m.change_num === undefined ? '-' : m.change_num) + '</td>' +
       '<td class="num">' + effCell + '</td><td class="num">' + quota + '</td><td class="tiers">' + tiers + '</td><td>' + sizeCell(m) + '</td>' +
@@ -273,6 +287,66 @@ function renderModels() {
   });
 }
 
+// --- cloud records ------------------------------------------------------------------
+function renderRecords(list) {
+  if (!list || !list.length) {
+    $('records').innerHTML = '<tr><td class="sub">没有可显示的会话（可点「含上游」列出账号里的会话）</td></tr>';
+    return;
+  }
+  var rows = ['<tr><th style="width:28px"></th><th>类型</th><th>模型</th><th>会话</th><th>提示词 / 标题</th><th>创建时间</th><th>来源</th></tr>'];
+  list.forEach(function (r) {
+    var box = r.deleted ? '' : '<input type="checkbox" class="recbox" data-kind="' + esc(r.kind) + '" value="' + esc(r.session_id) + '" style="width:auto">';
+    var src = r.tracked ? '<span class="tag ok">网关建</span>' : '<span class="tag warn">上游列表</span>';
+    if (r.deleted) src = '<span class="tag">已删</span>';
+    rows.push('<tr><td>' + box + '</td><td>' + esc(r.kind) + '</td><td>' + esc(r.model || '') + '</td>' +
+      '<td class="mono">' + esc(r.session_id) + '</td><td class="sub" style="white-space:normal;max-width:300px">' + esc(r.prompt || '') + '</td>' +
+      '<td class="mono">' + esc(String(r.created_at || '').replace('T', ' ').slice(0, 19)) + '</td>' +
+      '<td>' + src + '</td></tr>');
+  });
+  $('records').innerHTML = rows.join('');
+}
+function loadRecords() {
+  var q = $('recshowdeleted').checked ? '?deleted=1' : '';
+  if ($('recupstream').checked) q = '?upstream=1';
+  return api('/admin/records' + q)
+    .then(function (r) {
+      renderRecords(r.data || []);
+      $('recmsg').textContent = '待清理 ' + (r.pending === undefined ? '-' : r.pending) + ' 条';
+    })
+    .catch(function (e) { $('recmsg').textContent = '读取失败：' + e.message; });
+}
+function deleteRecords(body, note) {
+  $('recmsg').textContent = '正在删除…';
+  api('/admin/records/delete', { method: 'POST', body: JSON.stringify(body) })
+    .then(function (r) {
+      $('recmsg').textContent = note + '：成功 ' + r.deleted + ' 条' +
+        (r.failed && r.failed.length ? '，失败 ' + r.failed.length + ' 条（' + JSON.stringify(r.errors) + '）' : '') +
+        '，剩余 ' + r.pending + ' 条';
+      loadRecords();
+    })
+    .catch(function (e) { $('recmsg').textContent = '删除失败：' + e.message; });
+}
+$('recload').onclick = loadRecords;
+$('recshowdeleted').onchange = loadRecords;
+$('recupstream').onchange = loadRecords;
+$('recdel').onclick = function () {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('.recbox:checked'));
+  if (!boxes.length) { $('recmsg').textContent = '先勾选要删除的记录'; return; }
+  if (!confirm('删除选中的 ' + boxes.length + ' 条上游记录？网页端自己的会话不受影响。')) return;
+  var ids = [], items = [];
+  boxes.forEach(function (b) {
+    ids.push(b.value);
+    items.push({ id: b.value, kind: b.getAttribute('data-kind') });
+  });
+  deleteRecords({ ids: ids, items: items }, '删除选中');
+};
+$('recdelall').onclick = function () {
+  var n = document.querySelectorAll('.recbox').length;
+  if (!n) { $('recmsg').textContent = '没有待删除的记录'; return; }
+  if (!confirm('删除全部 ' + n + ' 条由本网关创建的上游记录？')) return;
+  deleteRecords({ all: true }, '删除全部');
+};
+
 function refresh() {
   $('clock').textContent = new Date().toLocaleTimeString();
   if (!(storedKey() || state.memKey)) { showGate(''); return Promise.resolve(); }
@@ -282,6 +356,7 @@ function refresh() {
       renderSession(r[0]); renderModels(); renderAccount(r[2]);
       $('keyState').textContent = '已连接 ' + location.host + '，每 30 秒自动刷新';
       say('');
+      return loadRecords();
     })
     .catch(function (e) {
       say('读取失败：' + e.message, 'bad');

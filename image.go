@@ -64,15 +64,21 @@ func (s *Server) prepareImageOptions(ctx context.Context, w http.ResponseWriter,
 	if p != nil {
 		if aspect != "" && !p.AllowsAspect(aspect) {
 			// A pixel-derived ratio ("2048x1365" -> "2048:1365") is not what any model
-			// lists; snap it to the nearest supported one before refusing.
+			// lists; snap it to the nearest supported one first.
 			if snapped, ok := p.SnapAspect(aspect); ok {
 				logf("INFO", "aspect %s snapped to %s for model %s", aspect, snapped, res.Key)
 				aspect = snapped
-			} else {
+			} else if s.cfg.StrictParams {
 				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
 					"model %s does not accept aspect_ratio %q; supported: %s",
 					res.Key, aspect, strings.Join(append(append([]string{}, p.AspectRatios...), `"" (auto)`), ", ")))
 				return nil, false
+			} else {
+				// Pass it through and let the upstream answer: nothing has shown that it
+				// refuses an unlisted ratio, and inventing a rejection here would hide the
+				// provider's real behaviour. (STRICT_PARAMS=1 turns this into a 400.)
+				logf("INFO", "aspect %s is not in model %s's list (%s); passing it through (STRICT_PARAMS=0)",
+					aspect, res.Key, strings.Join(p.AspectRatios, " "))
 			}
 		}
 		if aspect == "" {
@@ -87,10 +93,14 @@ func (s *Server) prepareImageOptions(ctx context.Context, w http.ResponseWriter,
 	}
 	if p != nil {
 		if size != "" && !p.AllowsSize(size) {
-			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
-				"model %s does not accept image_size %q; supported: %s (default %s)",
-				res.Key, size, strings.Join(p.ImageSizes, ", "), p.DefaultSize))
-			return nil, false
+			if s.cfg.StrictParams {
+				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
+					"model %s does not accept image_size %q; supported: %s (default %s)",
+					res.Key, size, strings.Join(p.ImageSizes, ", "), p.DefaultSize))
+				return nil, false
+			}
+			logf("INFO", "image_size %s is not in model %s's list (%s); passing it through (STRICT_PARAMS=0)",
+				size, res.Key, strings.Join(p.ImageSizes, " "))
 		}
 		if size == "" {
 			size = p.DefaultSize
@@ -99,9 +109,15 @@ func (s *Server) prepareImageOptions(ctx context.Context, w http.ResponseWriter,
 	opts.Size = size
 
 	if p != nil && p.PromptLimit > 0 && len([]rune(req.Prompt)) > p.PromptLimit {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
-			"prompt is %d characters; model %s allows %d", len([]rune(req.Prompt)), res.Key, p.PromptLimit))
-		return nil, false
+		msg := fmt.Sprintf("prompt is %d characters; model %s declares prompt_limit=%d upstream (which it does not enforce)",
+			len([]rune(req.Prompt)), res.Key, p.PromptLimit)
+		switch s.cfg.PromptLimitMode {
+		case "enforce":
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", msg)
+			return nil, false
+		case "warn":
+			logf("WARN", "%s — sending anyway (PROMPT_LIMIT_MODE=warn)", msg)
+		}
 	}
 	return opts, true
 }
@@ -309,6 +325,9 @@ func (s *Server) generateMJ(ctx context.Context, res Resolved, opts *genOptions)
 	if created.SessionID == "" {
 		return nil, fmt.Errorf("draw/create returned no session_id")
 	}
+	if s.records != nil {
+		s.records.Add("mj", created.SessionID, res.Key, opts.Prompt)
+	}
 	logf("INFO", "mj task started session=%s model=%d", created.SessionID, res.ID)
 
 	deadline := time.Now().Add(s.cfg.ImageTimeout)
@@ -370,6 +389,9 @@ func (s *Server) generateRepair(ctx context.Context, res Resolved, opts *genOpti
 	}
 	if created.SessionID == "" {
 		return nil, fmt.Errorf("repair/async/create returned no session_id")
+	}
+	if s.records != nil {
+		s.records.Add("image", created.SessionID, res.Key, opts.Prompt)
 	}
 	logf("INFO", "image task started session=%s model=%d code=%s", created.SessionID, res.ID, res.Key)
 

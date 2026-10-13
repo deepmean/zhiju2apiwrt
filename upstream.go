@@ -331,6 +331,116 @@ func (c *Client) Balance(ctx context.Context) (int, string, error) {
 	return data.IntegralBalance, data.ExpireTime, nil
 }
 
+// UpstreamSession is one conversation the account holds upstream.
+type UpstreamSession struct {
+	Kind      string    `json:"kind"` // chat | image | mj
+	SessionID string    `json:"session_id"`
+	Title     string    `json:"title"`
+	ModelID   int       `json:"model_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListSessions reads the account's conversations from all three families, so the panel can
+// offer cleanup for records created before the ledger existed.
+func (c *Client) ListSessions(ctx context.Context) ([]UpstreamSession, error) {
+	var out []UpstreamSession
+
+	var repair struct {
+		Items []struct {
+			SessionID string `json:"session_id"`
+			Title     string `json:"title"`
+			ModelID   int    `json:"model_group_id"`
+			CreatedAt string `json:"created_at"`
+		} `json:"items"`
+	}
+	if err := c.call(ctx, kindRepair, "/v1/aimoss/repair/history",
+		map[string]any{"keyword": "", "limit": 200, "cursor": "0"}, &repair); err == nil {
+		for _, it := range repair.Items {
+			out = append(out, UpstreamSession{
+				Kind: "image", SessionID: it.SessionID, Title: it.Title,
+				ModelID: it.ModelID, CreatedAt: parseUpstreamTime(it.CreatedAt),
+			})
+		}
+	}
+
+	var draw struct {
+		Items []struct {
+			SessionID string `json:"session_id"`
+			Title     string `json:"title"`
+			ModelID   int    `json:"model_id"`
+			CreatedAt string `json:"created_at"`
+		} `json:"items"`
+	}
+	if err := c.call(ctx, kindV1, "/v1/aimoss/draw/session/page",
+		map[string]any{"keyword": "", "cursor": "0", "limit": 200}, &draw); err == nil {
+		for _, it := range draw.Items {
+			out = append(out, UpstreamSession{
+				Kind: "mj", SessionID: it.SessionID, Title: it.Title,
+				ModelID: it.ModelID, CreatedAt: parseUpstreamTime(it.CreatedAt),
+			})
+		}
+	}
+
+	var chat struct {
+		Items []struct {
+			SessionID string `json:"session_id"`
+			Title     string `json:"title"`
+			ModelID   int    `json:"model_id"`
+			ChatTime  int64  `json:"chat_time"`
+			CreatedAt string `json:"created_at"`
+		} `json:"items"`
+	}
+	if err := c.call(ctx, kindChat, "/v2/ai/chat/sessions/query",
+		map[string]any{"cursor": "", "keyword": "", "limit": 100}, &chat); err == nil {
+		for _, it := range chat.Items {
+			created := parseUpstreamTime(it.CreatedAt)
+			if created.IsZero() && it.ChatTime > 0 {
+				created = time.Unix(it.ChatTime, 0)
+			}
+			out = append(out, UpstreamSession{
+				Kind: "chat", SessionID: it.SessionID, Title: it.Title,
+				ModelID: it.ModelID, CreatedAt: created,
+			})
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no sessions listed (every family call failed)")
+	}
+	return out, nil
+}
+
+// parseUpstreamTime accepts the RFC3339 timestamps the account uses.
+func parseUpstreamTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+// DeleteSession removes one upstream session. Each family has its own route, and all
+// three take the same single field, which is why the kind only selects the path.
+func (c *Client) DeleteSession(ctx context.Context, kind, sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("empty session id")
+	}
+	var path string
+	var rk reqKind
+	switch kind {
+	case "chat":
+		path, rk = "/v2/ai/chat/sessions/delete", kindChat
+	case "mj":
+		path, rk = "/v1/aimoss/draw/session/delete", kindV1
+	default: // image (repair family)
+		path, rk = "/v1/aimoss/repair/delete", kindRepair
+	}
+	var data map[string]any
+	return c.call(ctx, rk, path, map[string]any{"session_id": sessionID}, &data)
+}
+
 // CfgList fetches the web client's channel config. It answers only the iOS platform
 // (plat:web_browser gets ret=10002 不支持的平台) and carries two things this gateway
 // needs: channelConfig.wholeApiVersion for the chat route, and the full model table with

@@ -12,6 +12,9 @@ LOG_LEVEL=INFO
 UPSTREAM=https://agent.zhijuai.com
 TOKENS_FILE=/opt/zhiju2api/tokens.txt
 MODEL_MAP_FILE=/opt/zhiju2api/models.map
+# Ledger of the upstream sessions this gateway created, so the cloud records it leaves
+# behind can be deleted precisely (panel -> 云端记录, or GET/POST /admin/records*).
+RECORDS_FILE=/opt/zhiju2api/api-records.jsonl
 
 # Protocol versions. The web client uses a different `ver` header per route family:
 #   /v2/ai/chat/turns   -> channelConfig.wholeApiVersion (3.2.0)
@@ -91,3 +94,20 @@ MODEL_CACHE_TTL=30m
 #     ssh router 'echo 123456 > /tmp/zhiju-sms-code'
 # or an SMS-forwarding app on the phone writing it over ssh. Empty disables the watcher.
 SMS_CODE_FILE=/tmp/zhiju-sms-code
+
+# --- how much the gateway second-guesses the upstream -------------------------------
+# Both of these exist because a declared value is not the same as an enforced one, and the
+# defaults pass everything through so the upstream's own answer is the authority.
+#
+# PROMPT_LIMIT_MODE: /v1/aimoss/repair/params returns prompt_limit=1000 for EVERY image
+# model, but nothing enforces it — prompts of 1980 and 8000 characters were both accepted,
+# and the site's image pages never read the field (only the video page does, with a
+# `|| 1000` fallback). No ceiling could be found, so none is invented here.
+#   off (default) | warn (log and send) | enforce (400)
+PROMPT_LIMIT_MODE=off
+
+# STRICT_PARAMS: the aspect ratios and resolution tiers are declared per model, but an
+# unlisted value has not been shown to be refused upstream. Off by default, the request is
+# passed through and the provider's error comes back verbatim; on, an unsupported value is
+# a 400 listing what the model declares.
+STRICT_PARAMS=false

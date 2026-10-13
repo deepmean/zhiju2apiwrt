@@ -55,10 +55,11 @@ func logf(level, format string, args ...any) {
 }
 
 type Server struct {
-	cfg  *Config
-	c    *Client
-	pool *Pool
-	cat  *Catalog
+	cfg     *Config
+	c       *Client
+	pool    *Pool
+	cat     *Catalog
+	records *RecordLedger
 
 	// A pending SMS login: which phone a code was requested for, so the code can be
 	// handed back on its own (from a forwarder, or a file) without repeating the number.
@@ -109,7 +110,7 @@ func main() {
 
 	client := NewClient(cfg, pool)
 	cat := NewCatalog(cfg, client)
-	srv := &Server{cfg: cfg, c: client, pool: pool, cat: cat}
+	srv := &Server{cfg: cfg, c: client, pool: pool, cat: cat, records: NewRecordLedger(cfg.RecordsFile)}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if cfg.Discover {
@@ -153,6 +154,8 @@ func main() {
 	})
 	mux.HandleFunc("/admin/tokens", srv.auth(srv.handleAdminTokens))
 	mux.HandleFunc("/admin/account", srv.auth(srv.handleAccount))
+	mux.HandleFunc("/admin/records", srv.auth(srv.handleRecords))
+	mux.HandleFunc("/admin/records/delete", srv.auth(srv.handleRecordsDelete))
 	mux.HandleFunc("/admin/push", srv.handlePush) // key may arrive in ?key= (cross-origin)
 	mux.HandleFunc("/admin/session", srv.auth(srv.handleSession))
 	mux.HandleFunc("/admin/login/sms", srv.auth(srv.handleLoginSMS))

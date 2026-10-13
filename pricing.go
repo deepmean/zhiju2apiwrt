@@ -267,6 +267,11 @@ func (s *Server) modelList(ctx context.Context, withPrices bool) []map[string]an
 				}
 				if p.PromptLimit > 0 {
 					entry["prompt_limit"] = p.PromptLimit
+					// Say plainly that it is informational: the provider returns 1000 for
+					// every image model and accepts far longer prompts, and its own web
+					// client never reads the field on image pages.
+					entry["prompt_limit_enforced"] = s.cfg.PromptLimitMode == "enforce"
+					entry["prompt_limit_note"] = "declared by the upstream, not enforced by it (verified: 1980 and 8000 character prompts were both accepted)"
 				}
 			}
 		}

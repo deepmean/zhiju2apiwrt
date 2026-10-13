@@ -201,6 +201,11 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req chatRequ
 		if te.Type == "" {
 			te.Type = ev.Event
 		}
+		// The session id only appears once the turn starts; that is the cloud record this
+		// request creates, so the ledger learns it here.
+		if te.SessionID != "" && s.records != nil {
+			s.records.Add("chat", te.SessionID, req.Model, body.Data.Prompt)
+		}
 		switch te.Type {
 		case "turn.started", "model.started":
 			if !sentRole {
@@ -274,6 +279,9 @@ func (s *Server) bufferedChat(w http.ResponseWriter, r *http.Request, req chatRe
 		}
 		if te.Type == "" {
 			te.Type = ev.Event
+		}
+		if te.SessionID != "" && s.records != nil {
+			s.records.Add("chat", te.SessionID, req.Model, body.Data.Prompt)
 		}
 		switch te.Type {
 		case "message.delta":

@@ -401,6 +401,156 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleRecords lists the sessions this gateway created, and deletes them upstream.
+//
+//	GET  /admin/records[?deleted=1]     -> the ledger (newest first)
+//	POST /admin/records/delete          -> {"ids":[...]} or {"all":true}
+//
+// Deleting through the ledger rather than "the newest N sessions" is the whole point: the
+// account's other conversations belong to the human using the web UI.
+func (s *Server) handleRecords(w http.ResponseWriter, r *http.Request) {
+	if s.records == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"data": []any{}, "note": "record ledger disabled"})
+		return
+	}
+	includeDeleted := r.URL.Query().Get("deleted") == "1"
+	items := s.records.List(includeDeleted)
+
+	// The ledger only knows what was created since it existed. ?upstream=1 also lists the
+	// account's conversations, flagging which ones the gateway is known to have created, so
+	// records from before the ledger can still be cleaned up deliberately.
+	if r.URL.Query().Get("upstream") == "1" {
+		known := map[string]APIRecord{}
+		for _, rec := range s.records.List(true) {
+			known[rec.SessionID] = rec
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		ups, err := s.c.ListSessions(ctx)
+		if err != nil {
+			logf("WARN", "listing upstream sessions: %v", err)
+		}
+		seen := map[string]bool{}
+		merged := make([]map[string]any, 0, len(items)+len(ups))
+		for _, rec := range items {
+			seen[rec.SessionID] = true
+			merged = append(merged, map[string]any{
+				"kind": rec.Kind, "session_id": rec.SessionID, "model": rec.Model,
+				"prompt": rec.Prompt, "created_at": rec.CreatedAt, "tracked": true,
+				"deleted": rec.Deleted,
+			})
+		}
+		for _, up := range ups {
+			if seen[up.SessionID] {
+				continue
+			}
+			merged = append(merged, map[string]any{
+				"kind": up.Kind, "session_id": up.SessionID, "prompt": up.Title,
+				"created_at": up.CreatedAt, "tracked": false, "deleted": false,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object":  "list",
+			"note":    "tracked=true 是网关创建并记账的；tracked=false 是上游列表里发现、但台账里没有的（可能早于台账，也可能是网页端自己的会话）",
+			"pending": len(s.records.Pending()),
+			"data":    merged,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"object":  "list",
+		"note":    "sessions created by this gateway; the account's own conversations are not listed",
+		"pending": len(s.records.Pending()),
+		"data":    items,
+	})
+}
+
+func (s *Server) handleRecordsDelete(w http.ResponseWriter, r *http.Request) {
+	if s.records == nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "record ledger disabled")
+		return
+	}
+	var req struct {
+		IDs   []string `json:"ids"` // ledger ids (kind looked up)
+		Items []struct {
+			ID   string `json:"id"`
+			Kind string `json:"kind"`
+		} `json:"items"` // explicit kind, for records that predate the ledger
+		All bool `json:"all"`
+	}
+	if err := decodeJSON(w, r, &req, 1<<20); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+
+	pending := s.records.Pending()
+	byID := map[string]APIRecord{}
+	for _, rec := range pending {
+		byID[rec.SessionID] = rec
+	}
+
+	type target struct{ kind, id string }
+	var targets []target
+	switch {
+	case req.All:
+		// "All" means everything the gateway is known to have created — never the
+		// account's own conversations, which the ledger does not contain.
+		for _, rec := range pending {
+			targets = append(targets, target{rec.Kind, rec.SessionID})
+		}
+	default:
+		for _, id := range req.IDs {
+			kind := "image"
+			if rec, ok := byID[id]; ok {
+				kind = rec.Kind
+			}
+			targets = append(targets, target{kind, id})
+		}
+		for _, it := range req.Items {
+			if it.ID == "" {
+				continue
+			}
+			kind := it.Kind
+			if kind == "" {
+				kind = "image"
+			}
+			targets = append(targets, target{kind, it.ID})
+		}
+	}
+	if len(targets) == 0 {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "nothing to delete (pass ids, items or all=true)")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+
+	var deleted, failed []string
+	errors := map[string]string{}
+	for _, t := range targets {
+		if err := s.c.DeleteSession(ctx, t.kind, t.id); err != nil {
+			failed = append(failed, t.id)
+			errors[t.id] = err.Error()
+			logf("WARN", "delete %s session %s failed: %v", t.kind, t.id, err)
+			continue
+		}
+		deleted = append(deleted, t.id)
+	}
+	if len(deleted) > 0 {
+		s.records.MarkDeleted(deleted...)
+	}
+	logf("INFO", "cloud records: %d deleted, %d failed", len(deleted), len(failed))
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      len(failed) == 0,
+		"deleted": len(deleted),
+		"failed":  failed,
+		"errors":  errors,
+		"pending": len(s.records.Pending()),
+	})
+}
+
 // maskPhone keeps the number out of logs and responses beyond its last four digits.
 func maskPhone(phone string) string {
 	if len(phone) < 7 {

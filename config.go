@@ -18,6 +18,9 @@ type Config struct {
 	Upstream  string // https://agent.zhijuai.com
 	TokensF   string // session tokens, one per line
 	ModelMapF string // model_key=model_id overrides, one per line
+	// Ledger of the upstream sessions this gateway created, so the cloud records it
+	// leaves behind can be deleted precisely (see /admin/records).
+	RecordsFile string
 
 	// Upstream protocol versions. The web client sends different values per endpoint:
 	// the v2 chat/turns route needs channelConfig.wholeApiVersion (3.2.0 as of writing),
@@ -63,6 +66,25 @@ type Config struct {
 	// code can arrive from an SMS forwarder or a single ssh command instead of a JSON
 	// request. Empty disables the watcher.
 	SMSCodeFile string
+	// PromptLimitMode decides what the upstream-declared prompt_limit means.
+	//
+	// The upstream returns prompt_limit=1000 for every image model, but it does not
+	// enforce it: prompts of 1980 and 8000 characters were both accepted, and the site's
+	// own image pages never read the field (only the video page does, with a `|| 1000`
+	// fallback). Since no ceiling could be found, the gateway does not invent one — the
+	// upstream's own answer is the authority.
+	//
+	//	off     ignore the field entirely (default)
+	//	warn    log a line and send anyway
+	//	enforce reject with 400
+	PromptLimitMode string
+	// StrictParams turns the aspect-ratio / resolution checks into rejections.
+	//
+	// Off by default for the same reason: the values are declared per model, but a value
+	// the model does not list has not been shown to be refused by the upstream, so the
+	// request is passed through and the upstream's error is returned verbatim. With it on,
+	// an unsupported value is a 400 that lists what the model declares.
+	StrictParams bool
 
 	MaxBodyBytes   int64
 	MaxImageBytes  int64
@@ -156,6 +178,7 @@ func LoadConfig() *Config {
 		Upstream:  strings.TrimRight(envStr("UPSTREAM", "https://agent.zhijuai.com"), "/"),
 		TokensF:   envStr("TOKENS_FILE", "/opt/zhiju2api/tokens.txt"),
 		ModelMapF: envStr("MODEL_MAP_FILE", "/opt/zhiju2api/models.map"),
+		RecordsFile: envStr("RECORDS_FILE", "/opt/zhiju2api/api-records.jsonl"),
 
 		ChatVer:   envStr("CHAT_VER", "3.2.0"),
 		AimossVer: envStr("AIMOSS_VER", "2.2.11"),
@@ -184,6 +207,8 @@ func LoadConfig() *Config {
 		ModelCacheTTL:     envDur("MODEL_CACHE_TTL", 30*time.Minute),
 		TokenExpiryWarnDays: envInt("TOKEN_EXPIRY_WARN_DAYS", 14),
 		SMSCodeFile:         envStr("SMS_CODE_FILE", "/tmp/zhiju-sms-code"),
+		PromptLimitMode:     strings.ToLower(envStr("PROMPT_LIMIT_MODE", "off")),
+		StrictParams:        envBool("STRICT_PARAMS", false),
 
 		MaxBodyBytes:   int64(envInt("MAX_BODY_BYTES", 8<<20)),
 		MaxImageBytes:  int64(envInt("MAX_IMAGE_BYTES", 8<<20)),
