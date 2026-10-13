@@ -76,6 +76,11 @@ MAX_UPLOAD_BYTES=10485760
 # --- session upkeep -----------------------------------------------------------------
 # Heartbeat pings every token so a dead session shows up in /health before a client
 # request does; the token file is re-read this often, so replacing it needs no restart.
+#
+# There is no renewal upstream: a token simply expires, so the heartbeat also warns once
+# a day during the last TOKEN_EXPIRY_WARN_DAYS days, telling you to renew it. /health
+# carries days_left per token.
 HEARTBEAT_INTERVAL=30m
 TOKEN_RELOAD_INTERVAL=5s
+TOKEN_EXPIRY_WARN_DAYS=14
 MODEL_CACHE_TTL=30m

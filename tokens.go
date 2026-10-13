@@ -23,10 +23,11 @@ type Token struct {
 	Username string
 	Exp      time.Time
 
-	mu       sync.Mutex
-	invalid  bool
-	lastErr  string
-	lastSeen time.Time // last time the upstream accepted it
+	mu        sync.Mutex
+	invalid   bool
+	lastErr   string
+	lastSeen  time.Time // last time the upstream accepted it
+	warnedOn  string    // expiry-warning bookkeeping: one warning per calendar day
 }
 
 func (t *Token) masked() string {
@@ -315,6 +316,14 @@ func (t *Token) describe() string {
 	return name
 }
 
+// daysLeft is the remaining token lifetime, or -1 when the token carries no exp.
+func (t *Token) daysLeft() float64 {
+	if t.Exp.IsZero() {
+		return -1
+	}
+	return time.Until(t.Exp).Hours() / 24
+}
+
 // statuses is the /health payload.
 func (p *Pool) statuses() []map[string]any {
 	var out []map[string]any
@@ -326,6 +335,9 @@ func (p *Pool) statuses() []map[string]any {
 			"exp":       t.Exp.Format(time.RFC3339),
 			"invalid":   t.invalid,
 			"last_seen": t.lastSeen.Format(time.RFC3339),
+		}
+		if d := t.daysLeft(); d >= 0 {
+			m["days_left"] = int(d)
 		}
 		if t.lastErr != "" {
 			m["last_error"] = t.lastErr
@@ -351,6 +363,22 @@ func (p *Pool) StartMaintenance(c *Client, stop <-chan struct{}) {
 			p.Reload()
 		case <-beat.C:
 			for _, t := range p.All() {
+				// Warn while there is still time to act: the upstream has no renewal, so
+				// an expiring token is a deadline, not a transient condition. One warning
+				// per day — the heartbeat runs far more often than the deadline moves.
+				if d := t.daysLeft(); d >= 0 && d <= float64(p.cfg.TokenExpiryWarnDays) {
+					t.mu.Lock()
+					day := time.Now().Format("2006-01-02")
+					first := t.warnedOn != day
+					if first {
+						t.warnedOn = day
+					}
+					t.mu.Unlock()
+					if first {
+						logf("WARN", "token %s expires in %.1f days (%s) — renew it: POST /admin/login/sms then /admin/login, or run tools/zhiju_token_sync.py from a logged-in browser",
+							t.describe(), d, t.Exp.Format("2006-01-02"))
+					}
+				}
 				go func(t *Token) {
 					if err := c.Ping(t); err != nil {
 						if isAuthError(err) {

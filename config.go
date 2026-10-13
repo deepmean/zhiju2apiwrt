@@ -56,6 +56,9 @@ type Config struct {
 	HeartbeatInterval time.Duration
 	TokenReloadEvery  time.Duration
 	ModelCacheTTL     time.Duration
+	// How long before a token's exp the heartbeat starts warning about it. There is no
+	// renewal upstream, so expiry is a deadline the operator has to meet.
+	TokenExpiryWarnDays int
 
 	MaxBodyBytes   int64
 	MaxImageBytes  int64
@@ -175,6 +178,7 @@ func LoadConfig() *Config {
 		HeartbeatInterval: envDur("HEARTBEAT_INTERVAL", 30*time.Minute),
 		TokenReloadEvery:  envDur("TOKEN_RELOAD_INTERVAL", 5*time.Second),
 		ModelCacheTTL:     envDur("MODEL_CACHE_TTL", 30*time.Minute),
+		TokenExpiryWarnDays: envInt("TOKEN_EXPIRY_WARN_DAYS", 14),
 
 		MaxBodyBytes:   int64(envInt("MAX_BODY_BYTES", 8<<20)),
 		MaxImageBytes:  int64(envInt("MAX_IMAGE_BYTES", 8<<20)),
