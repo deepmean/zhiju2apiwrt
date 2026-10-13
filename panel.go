@@ -59,9 +59,28 @@ td.tiers{white-space:normal;max-width:120px}
 summary{cursor:pointer}
 details[open] summary{margin-bottom:4px}
 th.nowrap,td.nowrap{white-space:nowrap}
+#gate{position:fixed;inset:0;background:rgba(8,10,14,.92);display:flex;align-items:center;justify-content:center;z-index:10;padding:20px}
+#gate.hide{display:none}
+.gatebox{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:460px;width:100%}
+.gatebox h2{margin:0 0 8px;font-size:18px}
+.gatebox p{margin:0 0 10px}
 </style>
 </head>
 <body>
+<div id="gate">
+  <div class="gatebox">
+    <h2>需要 API Key</h2>
+    <p class="sub">面板本身不含任何密钥。填一次，浏览器会记住（只存在本机）。<br>
+       在路由器上执行 <span class="mono">grep API_KEY /opt/zhiju2api/zhiju2api.conf</span> 可以看到它。</p>
+    <input id="gatekey" type="password" placeholder="sk-..." autofocus>
+    <div class="row" style="margin-top:10px">
+      <div style="flex:0 0 auto"><button id="gatesave">保存并进入</button></div>
+    </div>
+    <p class="sub" id="gateerr" style="color:#ff6b6b"></p>
+    <p class="sub">也可以直接带 key 打开（fragment 不会发给服务器）：<br>
+      <span class="mono">http://<span id="gatehost"></span>/panel#key=sk-...</span></p>
+  </div>
+</div>
 <header><b>zhiju2api</b><span id="ver"></span><span style="flex:1"></span><span id="clock"></span></header>
 <main>
 
@@ -139,11 +158,11 @@ th.nowrap,td.nowrap{white-space:nowrap}
 </main>
 <script>
 var $ = function (id) { return document.getElementById(id); };
-var state = { session: null, models: [], account: null, selected: null };
+var state = { session: null, models: [], account: null, selected: null, memKey: '' };
 
 function api(path, opts) {
   opts = opts || {};
-  var key = localStorage.getItem('zhiju_key') || '';
+  var key = storedKey() || state.memKey || '';
   var headers = { 'Authorization': 'Bearer ' + key };
   if (opts.body) headers['Content-Type'] = 'application/json';
   return fetch(path, { method: opts.method || 'GET', headers: headers, body: opts.body })
@@ -255,6 +274,7 @@ function renderModels() {
 
 function refresh() {
   $('clock').textContent = new Date().toLocaleTimeString();
+  if (!(storedKey() || state.memKey)) { showGate(''); return Promise.resolve(); }
   return Promise.all([api('/admin/session'), api('/v1/models'), api('/admin/account')])
     .then(function (r) {
       state.session = r[0]; state.models = (r[1] && r[1].data) || []; state.account = r[2];
@@ -264,7 +284,8 @@ function refresh() {
     })
     .catch(function (e) {
       say('读取失败：' + e.message, 'bad');
-      $('keyState').textContent = '请填对 API Key（路由器 /opt/zhiju2api/zhiju2api.conf 里）';
+      $('keyState').textContent = 'API Key 无效或网关不可达';
+      if (/API key/i.test(e.message)) showGate('这个 API Key 不对，请重新输入');
     });
 }
 
@@ -293,17 +314,80 @@ function buildBookmarklet() {
 }
 
 function consumeFragment() {
-  var h = location.hash || '';
-  if (h.indexOf('#t=') !== 0) return;
-  var tok = '';
-  try { tok = decodeURIComponent(h.slice(3)); } catch (e) { tok = h.slice(3); }
-  history.replaceState(null, '', location.pathname);
-  if (!tok) return;
-  say('已从站点取回令牌，正在推送…');
-  pushTokens([tok], '来自浏览器登录');
+  // superseded by boot()/parseIncoming(); kept as a no-op so an old cached page cannot
+  // throw on a missing function.
+  return;
 }
 
-$('save').onclick = function () { localStorage.setItem('zhiju_key', $('key').value.trim()); refresh(); };
+// --- key handling ------------------------------------------------------------------
+// The panel ships with no key on purpose (the HTML is readable by anyone on the LAN),
+// so the key is entered once and kept in this browser. Without it every call is a 401 and
+// the page looks empty — hence the gate, rather than a silent blank panel.
+function storedKey() { return localStorage.getItem('zhiju_key') || ''; }
+
+function applyKey(k, quiet) {
+  k = (k || '').trim();
+  if (!k) return false;
+  try { localStorage.setItem('zhiju_key', k); } catch (e) { state.memKey = k; }
+  $('gate').className = 'hide';
+  $('key').value = k;
+  $('gateerr').textContent = '';
+  if (!quiet) refresh();
+  return true;
+}
+
+function showGate(msg) {
+  $('gate').className = '';
+  $('gatehost').textContent = location.host;
+  $('gateerr').textContent = msg || '';
+  setTimeout(function () { $('gatekey').focus(); }, 50);
+}
+
+// #key=... / #t=... (fragment: never sent to the server) and ?key=... (query: is sent).
+function parseIncoming() {
+  var out = { key: '', token: '' };
+  var q = location.search.replace(/^\?/, '');
+  if (q) q.split('&').forEach(function (kv) {
+    var p = kv.split('=');
+    if (p[0] === 'key') out.key = decodeURIComponent(p[1] || '');
+  });
+  var h = (location.hash || '').replace(/^#/, '');
+  if (h) h.split('&').forEach(function (kv) {
+    var i = kv.indexOf('=');
+    if (i < 0) return;
+    var k = kv.slice(0, i), v = decodeURIComponent(kv.slice(i + 1));
+    if (k === 'key') out.key = v;
+    if (k === 't' || k === 'token') out.token = v;
+  });
+  if (out.key || out.token) history.replaceState(null, '', location.pathname);
+  return out;
+}
+
+function boot() {
+  buildBookmarklet();
+  var incoming = parseIncoming();
+  if (incoming.key) applyKey(incoming.key, true);
+  var key = storedKey() || state.memKey || '';
+  $('key').value = key;
+  if (!key) { showGate(''); return; }
+  if (incoming.token) {
+    say('已从站点取回令牌，正在推送…');
+    pushTokens([incoming.token], '来自浏览器登录');
+  }
+  refresh();
+}
+
+$('save').onclick = function () {
+  if (!applyKey($('key').value)) { say('请先填 API Key', 'warn'); return; }
+};
+$('key').onkeydown = function (e) { if (e.key === 'Enter') $('save').onclick(); };
+$('gatesave').onclick = function () {
+  var k = $('gatekey').value.trim();
+  if (!k) { $('gateerr').textContent = '请填入 API Key'; return; }
+  if (!applyKey(k)) { $('gateerr').textContent = '保存失败（浏览器可能禁用了 localStorage）'; return; }
+  $('gatekey').value = '';
+};
+$('gatekey').onkeydown = function (e) { if (e.key === 'Enter') $('gatesave').onclick(); };
 $('reload').onclick = refresh;
 $('onlyimg').onchange = renderModels;
 $('onlyfree').onchange = renderModels;
@@ -350,10 +434,7 @@ $('pushquick').onclick = function () {
 };
 $('tokquick').onkeydown = function (e) { if (e.key === 'Enter') $('pushquick').onclick(); };
 
-buildBookmarklet();
-$('key').value = localStorage.getItem('zhiju_key') || '';
-consumeFragment();
-refresh();
+boot();
 setInterval(refresh, 30000);
 </script>
 </body>
