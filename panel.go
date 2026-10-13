@@ -54,7 +54,11 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .hint{color:var(--dim);font-size:12px;margin-top:8px;line-height:1.7}
 .scroll{max-height:520px;overflow:auto}
 .sub{color:var(--dim);font-size:11px}
-.ratios{white-space:normal;max-width:230px}
+.ratios{white-space:normal;max-width:260px}
+td.tiers{white-space:normal;max-width:120px}
+summary{cursor:pointer}
+details[open] summary{margin-bottom:4px}
+th.nowrap,td.nowrap{white-space:nowrap}
 </style>
 </head>
 <body>
@@ -197,20 +201,25 @@ function renderAccount(a) {
 
 function sizeCell(m) {
   if (!m.aspect_ratios) return '<span class="sub">—</span>';
-  var parts = [];
-  (m.aspect_ratios || []).forEach(function (r) {
-    if (!r) return;
+  var ratios = (m.aspect_ratios || []).filter(function (r) { return r; });
+  if (!ratios.length) return '<span class="sub">仅自动</span>';
+  var tiers = (m.image_sizes || []).join('/') || '-';
+  var detail = [];
+  ratios.forEach(function (r) {
     var px = (m.size_table && m.size_table[r]) || {};
-    var tiers = Object.keys(px).map(function (t) { return t + ' ' + px[t]; });
-    parts.push('<div>' + esc(r) + (tiers.length ? ' <span class="sub">' + esc(tiers.join(' / ')) + '</span>' : '') + '</div>');
+    var t = Object.keys(px).map(function (k) { return k + ' ' + px[k]; });
+    detail.push('<div>' + esc(r) + (t.length ? ' <span class="sub">' + esc(t.join(' · ')) + '</span>' : '') + '</div>');
   });
-  if (!parts.length) return '<span class="sub">' + esc((m.default_aspect_ratio || 'auto')) + '（仅自动）</span>';
-  return '<div class="ratios">' + parts.join('') + '</div>';
+  // Ratios stay on one line; the per-tier pixels go behind a disclosure, otherwise a
+  // model with 14 ratios turns every row into a wall of text.
+  return '<div class="ratios">' + esc(ratios.join(' ')) + '</div>' +
+    '<div class="sub">档位 ' + esc(tiers) + ' · 默认 ' + esc(m.default_aspect_ratio || 'auto') + '</div>' +
+    '<details><summary class="sub">像素表</summary><div class="mono">' + detail.join('') + '</div></details>';
 }
 
 function renderModels() {
   var onlyImg = $('onlyimg').checked, onlyFree = $('onlyfree').checked;
-  var rows = ['<tr><th>模型 id</th><th>真实名字</th><th>能力</th><th class="num">标价</th><th class="num">实付</th><th class="num">配额</th><th>分辨率</th><th>支持比例 / 像素</th><th>说明</th></tr>'];
+  var rows = ['<tr><th class="nowrap">模型 id</th><th class="nowrap">真实名字</th><th class="nowrap">能力</th><th class="num nowrap">标价</th><th class="num nowrap">实付</th><th class="num nowrap">配额</th><th class="nowrap">分辨率</th><th>支持比例</th><th>说明</th></tr>'];
   state.models.filter(function (m) {
     if (onlyImg && m.capability === 'chat') return false;
     if (onlyFree && !(m.unlimited || m.effective_change_num === 0)) return false;
@@ -221,7 +230,7 @@ function renderModels() {
     var quota = (m.quota_remain === undefined) ? '-' : (m.quota_remain < 0 ? '不限' : m.quota_remain);
     var name = esc(m.name || '');
     if (m.enabled === false) name += ' <span class="tag bad">已禁用</span>';
-    var tiers = (m.image_sizes || []).length ? (m.image_sizes.join('/') + '<div class="sub">默认 ' + esc(m.default_image_size || '-') + '</div>')
+    var tiers = (m.image_sizes || []).length ? (esc(m.image_sizes.join('/')) + '<div class="sub">默认 ' + esc(m.default_image_size || '-') + '</div>')
       : (m.capability === 'chat' ? ('<div class="sub">上下文 ' + kb(m.context_window) + '</div><div class="sub">输出 ' + kb(m.max_tokens) + (m.think ? ' · 思考' : '') + '</div>') : '<span class="sub">—</span>');
     var note = [];
     if (m.upstream_key) note.push('<span class="mono">' + esc(m.upstream_key) + '</span>');
@@ -229,9 +238,9 @@ function renderModels() {
     if (m.price_policy) note.push(esc(m.price_policy));
     if (m.price_available === false && m.price_note) note.push('<span class="warn">' + esc(m.price_note) + '</span>');
     if (m.prompt_limit) note.push('提示词 ≤' + m.prompt_limit);
-    rows.push('<tr data-id="' + esc(m.id) + '"><td class="mono">' + esc(m.id) + '</td><td>' + name + '</td>' +
-      '<td>' + esc(m.capability || '') + '</td><td class="num">' + (m.change_num === undefined ? '-' : m.change_num) + '</td>' +
-      '<td class="num">' + effCell + '</td><td class="num">' + quota + '</td><td>' + tiers + '</td><td>' + sizeCell(m) + '</td>' +
+    rows.push('<tr data-id="' + esc(m.id) + '"><td class="mono nowrap">' + esc(m.id) + '</td><td>' + name + '</td>' +
+      '<td class="nowrap">' + esc(m.capability || '') + '</td><td class="num">' + (m.change_num === undefined ? '-' : m.change_num) + '</td>' +
+      '<td class="num">' + effCell + '</td><td class="num">' + quota + '</td><td class="tiers">' + tiers + '</td><td>' + sizeCell(m) + '</td>' +
       '<td class="sub">' + note.join('<br>') + '</td></tr>');
   });
   $('models').innerHTML = rows.join('');
