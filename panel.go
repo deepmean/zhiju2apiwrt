@@ -435,6 +435,14 @@ $('pushquick').onclick = function () {
 $('tokquick').onkeydown = function (e) { if (e.key === 'Enter') $('pushquick').onclick(); };
 
 boot();
+// A fragment-only change does not reload the document, so pasting a #key=... URL while
+// already on the panel would otherwise do nothing.
+window.addEventListener('hashchange', function () {
+  var incoming = parseIncoming();
+  if (incoming.key) applyKey(incoming.key, true);
+  if (incoming.token) { say('已从站点取回令牌，正在推送…'); pushTokens([incoming.token], '来自浏览器登录'); }
+  if (incoming.key || incoming.token) refresh();
+});
 setInterval(refresh, 30000);
 </script>
 </body>
