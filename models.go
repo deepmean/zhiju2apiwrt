@@ -176,9 +176,11 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 			remainByID[m.ModelID] = m.RemainCount
 		}
 		for _, group := range [][]Model{snap.Models["draw"], snap.Models["repair"]} {
-			if _, ok := ids[m.Key]; !ok {
-				if id := matchName(nameToID, m.Name); id > 0 {
-					ids[m.Key] = id
+			for _, m := range group {
+				if _, ok := ids[m.Key]; !ok {
+					if id := matchName(nameToID, m.Name); id > 0 {
+						ids[m.Key] = id
+					}
 				}
 			}
 		}
