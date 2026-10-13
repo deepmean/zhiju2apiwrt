@@ -103,4 +103,10 @@ writeFileSync(`${OUT}/panel-copy.jpg`, Buffer.from(shot.data, 'base64'))
 console.log('  截图 -> tools/verify/out/panel-copy.jpg')
 console.log(pass ? '\n全部通过' : '\n有失败项')
 ws.close(); try { chrome.kill() } catch {}
+// Chrome's profile is ~40MB (it downloads optimisation models on first run), so remove it
+// rather than leaving it behind on every check.
+for (let i = 0; i < 10; i++) {
+  await sleep(500)
+  try { rmSync(PROFILE, { recursive: true, force: true }); break } catch {}
+}
 process.exit(pass ? 0 : 1)

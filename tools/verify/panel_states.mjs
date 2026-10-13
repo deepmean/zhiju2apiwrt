@@ -94,4 +94,11 @@ let pass = true
 for (const [name, ok] of checks) { if (!ok) pass = false; console.log(`  ${ok ? 'OK  ' : 'FAIL'} ${name}`) }
 console.log(`  截图 -> tools/verify/out/panel-states.jpg`)
 ws.close(); try { chrome.kill() } catch {}
+// Chrome's profile is ~40MB (it downloads optimisation models on first run), so remove it
+// rather than leaving it behind on every check. Windows may still hold the handles for a
+// moment after the kill.
+for (let i = 0; i < 10; i++) {
+  await sleep(500)
+  try { rmSync(PROFILE, { recursive: true, force: true }); break } catch {}
+}
 process.exit(pass ? 0 : 1)
