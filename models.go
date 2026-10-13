@@ -209,9 +209,31 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 		}
 	}
 
-	// 5) explicit overrides win.
+	// 5) explicit overrides win, and an override for a key the upstream never declares also
+	//    *creates* that model.
+	//
+	//    banana21 (香蕉2.1) is why this exists. The web client sends it as model_code with
+	//    model_id 0, and it appears in none of the declaration sources — not cfg/list, not
+	//    repair/params, not the account quota list, not repair/home_v2 — so no
+	//    declaration-driven source can ever surface it, and the panel simply never showed
+	//    it. It is a real model (the operator generated an image with it, billed 268 灵力
+	//    as "使用香蕉2.1修图") reached through the same repair chain as everything else.
+	known := map[string]bool{}
+	for _, group := range [][]Model{snap.Models["text"], snap.Models["draw"], snap.Models["repair"]} {
+		for _, m := range group {
+			known[m.Key] = true
+		}
+	}
 	for k, v := range cat.overrides {
 		ids[k] = v
+		if known[k] {
+			continue
+		}
+		snap.Models["repair"] = append(snap.Models["repair"], Model{
+			Key: k, Name: k, Type: "repair",
+			Desc: "mapped in models.map; the upstream declares this model nowhere",
+		})
+		logf("INFO", "models.map adds a model the upstream never declares: %s (id=%d)", k, v)
 	}
 
 	cat.mu.Lock()
@@ -244,9 +266,12 @@ func buildIndex(text, draw, repair []Model, ids map[string]int) map[string]Resol
 	}
 	addImage := func(m Model, kind string) {
 		id, ok := ids[m.Key]
-		if !ok || id <= 0 {
+		if !ok {
 			return
 		}
+		// Presence means resolved: every declaration source only records an id it actually
+		// found (> 0), so an explicit models.map entry is the only way to reach here with 0
+		// — which is a real value, not a failure (banana21 is sent as model_id 0).
 		family := m.Type
 		if family == "" {
 			family = "repair"

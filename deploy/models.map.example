@@ -6,6 +6,16 @@
 #
 # format: model_key=model_id      (one per line, '#' comments allowed)
 #
+# A key the upstream never declares is not just an override — it CREATES the model, in the
+# repair (image) family. That is the only way to reach a "code-only" model:
+#
+#   banana21=0               # 香蕉2.1 —— 网页端首页横幅写着"图片创作(香蕉2.1上新！)"，
+#                            # 生成时发的是 model_code=banana21 + model_id=0。它不在
+#                            # cfg/list、repair/params、账号额度、repair/home_v2 任何一处，
+#                            # 所以自动解析永远发现不了它。计费名"使用香蕉2.1修图"，实测
+#                            # 268 灵力/次（2026-10-12 的一次真实生成）。
+#                            # 有了这行，模型以 banana21-image / banana21-image-edit 出现。
+#
 # Values observed in cfg/list (the web client's table), kept here as a reference:
 #   mj2=139                  # 绘画MJ-V7（高稳版）— note: NOT the legacy mj=8
 #   nanobanana2=97           # 香蕉 Pro（2K高清）
