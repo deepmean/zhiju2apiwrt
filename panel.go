@@ -175,9 +175,17 @@ th.nowrap,td.nowrap{white-space:nowrap}
   <div class="row" style="margin-bottom:10px">
     <div style="flex:0 0 auto"><label style="margin:0"><input type="checkbox" id="onlyimg" checked style="width:auto"> 只看图片模型</label></div>
     <div style="flex:0 0 auto"><label style="margin:0"><input type="checkbox" id="onlyfree" style="width:auto"> 只看免费/不限</label></div>
-    <div style="flex:0 0 auto"><button class="ghost" id="copycfg">复制「自定义分辨率表」JSON</button></div>
+    <div style="flex:0 0 auto"><button id="copyall">复制插件配置 JSON</button></div>
+    <div style="flex:0 0 auto"><button class="ghost" id="copysizes">复制分辨率表 JSON</button></div>
     <div style="flex:0 0 auto"><button class="ghost" id="copyyaml">复制 cordis.patch.yml 片段</button></div>
   </div>
+  <div class="hint">
+    三个按钮对应三个粘贴位置：<br>
+    · <b>插件配置 JSON</b> —— 完整字段，可作为 <span class="mono">cordis.patch.yml</span> 里 <span class="mono">config:</span> 的值（JSON 是合法 YAML），也照着它填 GUI 各字段；<br>
+    · <b>分辨率表 JSON</b> —— 只粘 GUI 的「自定义分辨率表（JSON）」这一个框；<br>
+    · <b>YAML 片段</b> —— 整段直接粘进 <span class="mono">cordis.patch.yml</span>，不用改缩进。
+  </div>
+  <textarea id="cfgbox" style="min-height:150px;margin-top:8px" placeholder="选一行模型，再点上面的按钮，配置会出现在这里（可直接全选复制）"></textarea>
   <div class="scroll"><table id="models"></table></div>
   <div class="hint">尺寸表由上游声明的「比例 × 分辨率档位」推算（长边 = 档位 ×1024）；网关收到任何近似像素都会吸附到最近的支持比例，所以像素是参考值。</div>
 </section>
@@ -530,28 +538,48 @@ function selectedModel() {
   return m;
 }
 function put(text, note) {
-  $('tokbox').value = text;
+  // Deliberately NOT the token textarea: that one is submitted as tokens, so writing a
+  // config into it would turn "复制配置" into "把配置当令牌推送".
+  $('cfgbox').value = text;
   if (navigator.clipboard) navigator.clipboard.writeText(text).catch(function () {});
   say(note, 'ok');
 }
-// The settings field wants ONLY the ratio table; the YAML block is for the config file.
-// Emitting the wrapper into the field is a paste that cannot work, which is exactly the
-// kind of thing that looks like the gateway's fault.
-$('copycfg').onclick = function () {
+// The plugin's own config keys, in the order the settings card shows them. Built here so a
+// pasted config is correct by construction: the size table comes from the upstream, and
+// editSizeMode=selected is what makes an edit honour the chosen resolution instead of
+// falling back to the gateway's IMAGE_SIZE (which is how "2K selected, 1K produced" began).
+function pluginConfig(m) {
+  return {
+    provider: 'openai-compat',
+    openaiCompatBaseURL: location.origin + '/v1',
+    openaiCompatModel: m.id,
+    openaiCompatSizes: m.size_table,
+    openaiCompatEditFormat: 'multipart',
+    openaiCompatEditSizeMode: 'selected',
+    openaiCompatQuality: '',
+    openaiCompatExtraBody: {},
+    openaiCompatEditExtra: {}
+  };
+}
+$('copyall').onclick = function () {
+  var m = selectedModel(); if (!m) return;
+  put(JSON.stringify(pluginConfig(m), null, 2),
+    '已复制完整插件配置 —— 粘到 cordis.patch.yml 的 config:（JSON 是合法 YAML），或照着填 GUI');
+};
+$('copysizes').onclick = function () {
   var m = selectedModel(); if (!m) return;
   put(JSON.stringify(m.size_table, null, 2),
-    '已复制 ' + m.id + ' 的分辨率表 JSON —— 粘到插件设置的「自定义分辨率表（JSON）」');
+    '已复制 ' + m.id + ' 的分辨率表 —— 只粘 GUI 的「自定义分辨率表（JSON）」');
 };
 $('copyyaml').onclick = function () {
   var m = selectedModel(); if (!m) return;
-  var y = '- id: image-gen\n  name: dsh-image-gen\n  config:\n' +
-    '    provider: openai-compat\n' +
-    '    openaiCompatBaseURL: ' + location.origin + '/v1\n' +
-    '    openaiCompatModel: ' + m.id + '\n' +
-    '    openaiCompatEditFormat: multipart\n' +
-    '    openaiCompatEditExtra: {}\n' +
-    '    openaiCompatSizes: ' + JSON.stringify(m.size_table) + '\n';
-  put(y, '已复制 ' + m.id + ' 的 cordis.patch.yml 片段 —— 粘到 image-gen 那段 config 里');
+  var cfg = pluginConfig(m);
+  var y = '- id: image-gen\n  name: dsh-image-gen\n  config:\n';
+  Object.keys(cfg).forEach(function (k) {
+    var v = cfg[k];
+    y += '    ' + k + ': ' + (v && typeof v === 'object' ? JSON.stringify(v) : JSON.stringify(v)) + '\n';
+  });
+  put(y, '已复制 cordis.patch.yml 片段 —— 整段替换现有的 image-gen 那条（缩进已对好）');
 };
 $('send').onclick = function () {
   var phone = $('phone').value.trim();
