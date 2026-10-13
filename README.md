@@ -116,9 +116,12 @@ repair 的真实请求体（**来自网页端源码，字段名与直觉不同**
 
 - 传的是 `prompt`（不是 `input_text`），并且必须带 `model_code` + `image_size`；
   只发 `input_text` 会创建成功但结果是 `图片生成失败`。
-- `model_id` 是**数字**，不是 `model_key`。网关按三级来源解析：
-  `/v1/aimoss/repair/home_v2` 的 `model_group_key → model_group_id`（权威）、
-  `/v1/account/get` 里「显示名 → id」回配、最后是 `models.map` 覆盖。
+- `model_id` 是**数字**，不是 `model_key`。网关按四级来源解析（先到先得）：
+  `/v1/aimoss/cfg/list` 的 `model_key → model_id`（最全，57 个 id）、
+  账号修复历史里的 `model_group_key → model_group_id`、`repair/home_v2` 的分组 id、
+  `/v1/account/get` 里「显示名 → id」回配；`models.map` 覆盖一切，并且能**创造**上游没声明的模型。
+- 图片族（索引里的 `-image` / `-image-edit`）来自快照的 draw/repair 列表，**加上** `cfg/list` 里
+  `draw: true` 的条目 —— 后者是 4K 档唯一的来源（快照只有 2K），见 §8 的模型清单。
 - 结果图 URL 出现在 `items[].messages{...}[].draw_content.url`。
 
 ### 2.4 改图：先上传再喂 URL
@@ -147,7 +150,8 @@ mj2-image                -> Midjourney V7 生图
 image-78                 -> 直接按数字 id 调用（排障用）
 ```
 
-`GET /v1/models` 只列出**已解析出数字 id** 的图片模型，避免给出一个必然 404 的名字。
+`GET /v1/models` 只列出**有 id 可用**的图片模型（id 为 0 也算，只要 `models.map` 显式给了它），
+避免给出一个必然 404 的名字。清单见 §8 的图片模型表。
 
 ---
 
@@ -453,15 +457,52 @@ image request seedream4: aspect=3:2 (requested pixels 2048x1365 (snapped)), imag
 至于"模型不支持的值"：默认（`STRICT_PARAMS=false`）**照发**，让上游自己给答案 —— 没有任何证据
 表明上游会拒绝未声明的值，自造 400 只会掩盖它的真实行为；`STRICT_PARAMS=true` 才 400 并列出可选值。
 
+### 图片模型清单（实付 = 本账号价格，来自服务端报价）
+
+每个模型都另有 `-image-edit` 变体（改图走同一条链，多带一张输入图）。
+
+| OpenAI 模型名 | 上游展示名 | 标价 | 本账号实付 | 档位 | 比例数 |
+|---|---|---:|---:|---|---:|
+| `seedream4-image` | 升智-1 | 80 | **0**（会员不限） | 1K / 2K | 10 |
+| `seedream452k-image` | 即梦4.5 | 160 | 152 | 2K | 10 |
+| `banana31FLite-image` | 香蕉 2-Lite（快速版） | 200 | 200 | 1K | 14 |
+| `seedream502k-image` | 即梦5.0 | 240 | 240 | 2K | 10 |
+| `gptimage2-image` | 升智-2 | 280 | 280 | 2K | 11 |
+| `nanobananaFlash22k-image` | 香蕉 2 | 300 | 304 | 2K | 14 |
+| `gptimage25flare2k-image` | 升智-2.5创作版 | 304 | 304 | 2K | 11 |
+| `gptimage25sunburst2k-image` | 升智-2.5编辑版 | 304 | 304 | 2K | 11 |
+| `nanobananaFlash24k-image` | 香蕉 2（4K高清） | 350 | 352 | **4K** | 14 |
+| `gptimage25flare4k-image` | 全灵-2.5创作版（4k超清） | 352 | 352 | **4K** | 11 |
+| `gptimage25sunburst4k-image` | 全灵-2.5编辑版（4k超清） | 352 | 352 | **4K** | 11 |
+| `nanobanana2-image` | 香蕉 Pro | 420 | 416 | 2K | 10 |
+| `nanobanana4k-image` | 香蕉 Pro（4K超清） | 520 | **520** | **4K** | 10 |
+| `banana21-image` | 香蕉2.1 | — | —（无价目） | 未声明 | — |
+| `mj2-image` | Midjourney V7（高稳版） | — | —（按次结算） | 无档位 | 3 |
+
+**4K 是独立模型，不是 2K 模型的档位**，而且更贵：
+
+| 家族 | 2K 实付 | 4K 实付 | 差 |
+|---|---:|---:|---:|
+| 香蕉 Pro | 416 | 520 | +104 |
+| 香蕉 2 | 304 | 352 | +48 |
+| 全灵-2.5 创作版 | 304 | 352 | +48 |
+| 全灵-2.5 编辑版 | 304 | 352 | +48 |
+
+所以在插件里用 4K 要**换「模型」字段**（填 `nanobanana4k-image`），不是换分辨率下拉。
+这些 4K 条目并不在上游快照的 draw/repair 列表里（那两张表只有 2K 变体），是网关从
+`cfg/list` 中 `draw: true` 的条目补进索引的 —— 见 §14 的目录构建说明。
+
+`banana21`（香蕉2.1）是另一种情况：快照里有它、名字就叫"香蕉2.1"，但**没有 `model_id`**，
+网页端发 `model_id: 0`，所以只能靠 `models.map` 手工登记（见 §12）。
+
 关键事实（实测）：**`image_size` 基本不是"可选档位"**，而是模型固有属性 ——
 
 | 模型 | 比例 | 分辨率 |
 |---|---|---|
 | 升智-1 `seedream4` | `""`(自动) `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `1:1` `9:16` `16:9` `21:9` | **`1K` `2K`**（唯一双档） |
-| 香蕉 Pro `nanobanana2` | 同上 | 只有 `2K` |
-| 香蕉 2 `nanobananaFlash22k` | 另含 `1:4` `4:1` `1:8` `8:1` | 只有 `2K` |
+| 香蕉 Pro `nanobanana2` / 香蕉 2 `nanobananaFlash22k` | 香蕉 2 另含 `1:4` `4:1` `1:8` `8:1` | 只有 `2K`（4K 见上表，是另一个模型） |
 | 升智-2 `gptimage2` | 默认 `auto` | 只有 `2K` |
-| 升智-2.5创作/编辑版 | 默认 `auto` | 只有 `2K`（4K 是另一个模型 id） |
+| 升智-2.5创作/编辑版 | 默认 `auto` | 只有 `2K` |
 | Midjourney V7 `mj2` | 只有 `4:3` `1:1` `3:4` | 无档位概念（**默认禁用，见下**） |
 
 所以 `IMAGE_SIZE` 配置项是**偏好**不是开关：请求带像素（或显式 `image_size`）时以请求为准，
