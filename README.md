@@ -262,6 +262,19 @@ logread -e zhiju2api
 > **procd 只在启动时读 conf**：改完 `zhiju2api.conf` 必须 `restart`；
 > 改 `tokens.txt` 不用（热加载）。
 
+### 升级（换二进制）
+
+```sh
+tools/deploy-router.sh jcg --addr 192.168.26.1
+```
+
+**默认只换二进制，不动路由器上的 `zhiju2api.conf`** —— 那份配置是你在设备上维护的
+（API key、分辨率档、路径），部署覆盖它就会变成"没人改过却报 API key 无效"。
+确实要连配置一起推才加 `--conf`。
+
+脚本做了三件实测踩过的事：先 `stop` 再传（运行中的二进制会被占用，直接 scp 报
+`dest open ... Failure`）、传完比对 **md5**、启动后打印 conf 里 `API_KEY` 的长度并检查 8080 是否在听。
+
 ---
 
 ## 7. 使用
