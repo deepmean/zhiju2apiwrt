@@ -63,8 +63,48 @@ func TestRatioFromSizeDerivation(t *testing.T) {
 	}
 }
 
-// The dsh image-gen plugin sends pixels from its own size table, so the gateway has to
-// recover the ratio the model actually lists — gcd reduction gives values nobody has.
+// The regression this locks in: a client that picks "2K" in its UI can only express that
+// as pixels, and ignoring the implied tier made every request fall back to the configured
+// IMAGE_SIZE — "I selected 2K and got 1K".
+func TestTierFromPixels(t *testing.T) {
+	cases := map[string]string{
+		"1024x1024": "1K",
+		"2048x2048": "2K",
+		"2048x1365": "2K", // 3:2 at 2K, from the plugin's size table
+		"1365x2048": "2K",
+		"3072x3072": "3K",
+		"4096x1715": "4K", // 21:9 at 4K
+		"512x512":   "1K", // rounds up to the smallest tier
+		"":          "",
+		"garbage":   "",
+		"auto":      "",
+		"0x0":       "",
+	}
+	for in, want := range cases {
+		if got := tierFromPixels(in); got != want {
+			t.Errorf("tierFromPixels(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The pixel-derived tier must beat the configured preference, but only when the model
+// actually offers it.
+func TestSizePrecedence(t *testing.T) {
+	seedream4 := &ModelParams{ImageSizes: []string{"1K", "2K"}, DefaultSize: "2K"}
+	nanobanana2 := &ModelParams{ImageSizes: []string{"2K"}, DefaultSize: "2K"}
+
+	// 2048x2048 implies 2K, which both models offer.
+	for _, p := range []*ModelParams{seedream4, nanobanana2} {
+		if got := tierFromPixels("2048x2048"); got != "2K" || !p.AllowsSize(got) {
+			t.Errorf("2048x2048 should be usable as 2K on %v", p.ImageSizes)
+		}
+	}
+	// 1024x1024 implies 1K, which 香蕉 Pro does not offer — the caller must not end up
+	// silently asking for a tier the model lacks.
+	if got := tierFromPixels("1024x1024"); got != "1K" || nanobanana2.AllowsSize(got) {
+		t.Error("1K must be rejected for a 2K-only model rather than passed through")
+	}
+}
 func TestSnapAspect(t *testing.T) {
 	p := &ModelParams{
 		AspectRatios: []string{"", "1:1", "2:3", "3:2", "3:4", "4:3", "16:9", "9:16", "21:9"},

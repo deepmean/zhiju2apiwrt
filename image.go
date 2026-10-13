@@ -38,6 +38,49 @@ const mjDisabledText = "Midjourney is disabled (MJ_ENABLED=false). It is not met
 	"most expensive model on the account, so it must be enabled deliberately. Set MJ_ENABLED=true " +
 	"in the config to allow it."
 
+// tierFromPixels maps a requested pixel size onto a resolution tier name, e.g.
+// "2048x2048" -> "2K".
+//
+// This exists because OpenAI-style clients express resolution as pixels, not tiers: the
+// dsh image-gen plugin turns its "2K" dropdown choice into `size: "2048x2048"`. Deriving
+// only the aspect ratio from that throws the tier away, and the request then falls back to
+// the configured IMAGE_SIZE — which is how "I selected 2K and got 1K" happened.
+func tierFromPixels(size string) string {
+	w, h, ok := parseSizePixels(size)
+	if !ok {
+		return ""
+	}
+	long := w
+	if h > w {
+		long = h
+	}
+	if long < 512 {
+		return ""
+	}
+	tier := int(math.Round(float64(long) / 1024.0))
+	if tier < 1 {
+		tier = 1
+	}
+	if tier > 8 {
+		return ""
+	}
+	return fmt.Sprintf("%dK", tier)
+}
+
+// parseSizePixels reads "WIDTHxHEIGHT".
+func parseSizePixels(size string) (int, int, bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(size)), "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	w, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	h, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil || w <= 0 || h <= 0 {
+		return 0, 0, false
+	}
+	return w, h, true
+}
+
 // genOptions is a validated, model-aware image request.
 type genOptions struct {
 	Prompt    string
@@ -45,6 +88,9 @@ type genOptions struct {
 	Size      string
 	InputURLs []string
 	MJParams  map[string]any
+	// Where each value came from, so a log line can answer "why did I get 1K".
+	AspectSource string
+	SizeSource   string
 }
 
 // prepareImageOptions validates the requested ratio and resolution against the model's
@@ -58,8 +104,11 @@ func (s *Server) prepareImageOptions(ctx context.Context, w http.ResponseWriter,
 	opts := &genOptions{Prompt: req.Prompt, MJParams: req.MJParams}
 
 	aspect := strings.TrimSpace(req.AspectRatio)
+	aspectSource := "request aspect_ratio"
 	if aspect == "" {
-		aspect = ratioFromSize(req.Size)
+		if aspect = ratioFromSize(req.Size); aspect != "" {
+			aspectSource = "requested pixels " + req.Size
+		}
 	}
 	if p != nil {
 		if aspect != "" && !p.AllowsAspect(aspect) {
@@ -68,6 +117,7 @@ func (s *Server) prepareImageOptions(ctx context.Context, w http.ResponseWriter,
 			if snapped, ok := p.SnapAspect(aspect); ok {
 				logf("INFO", "aspect %s snapped to %s for model %s", aspect, snapped, res.Key)
 				aspect = snapped
+				aspectSource += " (snapped)"
 			} else if s.cfg.StrictParams {
 				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
 					"model %s does not accept aspect_ratio %q; supported: %s",
@@ -82,31 +132,43 @@ func (s *Server) prepareImageOptions(ctx context.Context, w http.ResponseWriter,
 			}
 		}
 		if aspect == "" {
-			aspect = p.DefaultAspect
+			aspect, aspectSource = p.DefaultAspect, "model default"
 		}
 	}
 	opts.Aspect = aspect
+	opts.AspectSource = aspectSource
 
+	// Resolution: an explicit tier field wins, then the tier implied by the requested
+	// pixels, and only then the configured preference. A client that says 2048x2048 has
+	// already chosen 2K — letting IMAGE_SIZE override that is what produced "I selected 2K
+	// and got 1K".
 	size := strings.TrimSpace(req.ImageSize)
-	if size == "" && s.cfg.ImageSize != "" && (p == nil || p.AllowsSize(s.cfg.ImageSize)) {
-		size = s.cfg.ImageSize
+	sizeSource := "request image_size"
+	if size == "" {
+		if derived := tierFromPixels(req.Size); derived != "" {
+			size, sizeSource = derived, "requested pixels "+req.Size
+		}
 	}
-	if p != nil {
-		if size != "" && !p.AllowsSize(size) {
-			if s.cfg.StrictParams {
-				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
-					"model %s does not accept image_size %q; supported: %s (default %s)",
-					res.Key, size, strings.Join(p.ImageSizes, ", "), p.DefaultSize))
-				return nil, false
-			}
-			logf("INFO", "image_size %s is not in model %s's list (%s); passing it through (STRICT_PARAMS=0)",
-				size, res.Key, strings.Join(p.ImageSizes, " "))
+	if size != "" && p != nil && !p.AllowsSize(size) {
+		if s.cfg.StrictParams {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
+				"model %s does not accept image_size %q; supported: %s (default %s)",
+				res.Key, size, strings.Join(p.ImageSizes, ", "), p.DefaultSize))
+			return nil, false
 		}
-		if size == "" {
-			size = p.DefaultSize
-		}
+		logf("INFO", "image_size %s (%s) is not in model %s's list (%s); passing it through (STRICT_PARAMS=0)",
+			size, sizeSource, res.Key, strings.Join(p.ImageSizes, " "))
+	}
+	if size == "" && s.cfg.ImageSize != "" && (p == nil || p.AllowsSize(s.cfg.ImageSize)) {
+		size, sizeSource = s.cfg.ImageSize, "configured IMAGE_SIZE"
+	}
+	if p != nil && size == "" {
+		size, sizeSource = p.DefaultSize, "model default"
 	}
 	opts.Size = size
+	opts.SizeSource = sizeSource
+	logf("INFO", "image request %s: aspect=%s (%s), image_size=%s (%s)",
+		res.Key, aspect, aspectSource, size, sizeSource)
 
 	if p != nil && p.PromptLimit > 0 && len([]rune(req.Prompt)) > p.PromptLimit {
 		msg := fmt.Sprintf("prompt is %d characters; model %s declares prompt_limit=%d upstream (which it does not enforce)",
@@ -419,7 +481,8 @@ func (s *Server) generateRepair(ctx context.Context, res Resolved, opts *genOpti
 	if s.records != nil {
 		s.records.Add("image", created.SessionID, res.Key, opts.Prompt)
 	}
-	logf("INFO", "image task started session=%s model=%d code=%s", created.SessionID, res.ID, res.Key)
+	logf("INFO", "image task started session=%s model=%d code=%s aspect=%s image_size=%s",
+		created.SessionID, res.ID, res.Key, opts.Aspect, opts.Size)
 
 	deadline := time.Now().Add(s.cfg.ImageTimeout)
 	for time.Now().Before(deadline) {
