@@ -19,13 +19,34 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	// Embeds the IANA timezone database in the binary (~450KB): a router has no tzdata,
+	// and Go refuses to interpret the POSIX TZ=CST-8 form OpenWrt sets, so without this
+	// the process runs in UTC and the daily task fires at the wrong hour.
+	_ "time/tzdata"
 )
 
 var (
 	startedAt = time.Now()
 	logLevel  atomic.Int32
 	version   = "dev" // set with -ldflags "-X main.version=..."
+	// localLoc is the timezone the operator means. Resolved explicitly rather than trusting
+	// the TZ environment variable: Go does not understand the POSIX form (TZ=CST-8) that
+	// OpenWrt uses, so on a router without tzdata Go silently runs in UTC.
+	localLoc = time.UTC
 )
+
+// resolveLocation picks the process timezone. time/tzdata is embedded (see the import in
+// main), so the IANA name resolves even with no zoneinfo on the device; a fixed offset is
+// the last resort for a name the database does not know.
+func resolveLocation(name string, offsetHours int) *time.Location {
+	if name != "" {
+		if loc, err := time.LoadLocation(name); err == nil {
+			return loc
+		}
+		logf("WARN", "timezone %q not found in the embedded database; falling back to UTC%+d", name, offsetHours)
+	}
+	return time.FixedZone(fmt.Sprintf("UTC%+d", offsetHours), offsetHours*3600)
+}
 
 const (
 	lvlDebug = iota
@@ -51,7 +72,7 @@ func logf(level, format string, args ...any) {
 	if l < int(logLevel.Load()) {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "%s [%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), level, fmt.Sprintf(format, args...))
+	fmt.Fprintf(os.Stderr, "%s [%s] %s\n", time.Now().In(localLoc).Format("2006-01-02 15:04:05"), level, fmt.Sprintf(format, args...))
 }
 
 type Server struct {
@@ -89,6 +110,7 @@ func main() {
 	}
 
 	cfg := LoadConfig()
+	localLoc = resolveLocation(cfg.TZName, cfg.TZOffsetHours)
 	switch cfg.LogLevel {
 	case "DEBUG":
 		logLevel.Store(lvlDebug)

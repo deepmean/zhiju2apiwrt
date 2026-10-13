@@ -219,8 +219,8 @@ func (s *Server) runDailyTasks(reason string) {
 	}
 
 	s.daily.mu.Lock()
-	s.daily.lastRun = time.Now()
-	s.daily.lastDay = time.Now().Format("2006-01-02")
+	s.daily.lastRun = time.Now().In(localLoc)
+	s.daily.lastDay = time.Now().In(localLoc).Format("2006-01-02")
 	s.daily.lastResult = strings.Join(summary, "；")
 	s.daily.mu.Unlock()
 }
@@ -239,10 +239,11 @@ func parseClock(s string) (time.Duration, error) {
 	return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute, nil
 }
 
-// nextClock returns the next occurrence of a wall-clock offset from local midnight.
+// nextClock returns the next occurrence of a wall-clock offset from local midnight, in the
+// resolved timezone (not whatever the TZ environment variable happens to mean).
 func nextClock(at time.Duration) time.Time {
-	now := time.Now()
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	now := time.Now().In(localLoc)
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, localLoc)
 	next := midnight.Add(at)
 	if !next.After(now) {
 		next = next.Add(24 * time.Hour)

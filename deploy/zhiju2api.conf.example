@@ -118,6 +118,14 @@ PROMPT_LIMIT_MODE=off
 SIGNIN_ENABLED=true
 SIGNIN_AT=00:05
 
+# --- timezone ------------------------------------------------------------------------
+# Go does not understand the POSIX TZ=CST-8 form (musl does), and OpenWrt ships no tzdata,
+# so a POSIX TZ makes the process run in UTC — the daily task then fires 8 hours off and
+# every log line is 8 hours early. The binary embeds the IANA database, so an IANA name
+# resolves on the device; TZ_OFFSET_HOURS is only the fallback for an unknown name.
+TZ_NAME=Asia/Shanghai
+TZ_OFFSET_HOURS=8
+
 # STRICT_PARAMS: the aspect ratios and resolution tiers are declared per model, but an
 # unlisted value has not been shown to be refused upstream. Off by default, the request is
 # passed through and the provider's error comes back verbatim; on, an unsupported value is

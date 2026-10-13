@@ -27,11 +27,13 @@ start_service() {
 
 	procd_open_instance
 	procd_set_param command "$PROG" -conf "$CONF"
-	# OpenWrt has no tzdata: musl only understands the POSIX form, and a zoneinfo name
-	# such as Asia/Shanghai silently falls back to UTC.
-	procd_set_param env TZ=CST-8
-	# Keep the heap small on a 250 MB router; the app lowers this itself too.
-	procd_set_param env GOGC=30
+	# ONE env call: procd_set_param is a set, not an append — a second procd_set_param env
+	# silently replaces the first, which is how TZ went missing here.
+	#
+	# TZ=CST-8 is the POSIX form musl and busybox understand. The Go binary ignores it (Go
+	# only reads IANA zoneinfo, which OpenWrt does not ship) and uses TZ_NAME from the conf
+	# instead, with the IANA database embedded in the binary.
+	procd_set_param env TZ=CST-8 GOGC=30
 	procd_set_param respawn 3600 5 5
 	procd_set_param stdout 1
 	procd_set_param stderr 1

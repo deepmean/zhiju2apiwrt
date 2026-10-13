@@ -49,6 +49,13 @@ type Config struct {
 	// never be reached by a typo or a client that picks the first model in the list.
 	MJEnabled bool
 
+	// Timezone. TZ=CST-8 is the POSIX form that musl understands but Go does NOT: Go only
+	// reads IANA zoneinfo files, and OpenWrt ships none, so a POSIX TZ silently falls back
+	// to UTC — which is how the daily task ended up scheduled 8 hours off and every log
+	// line was 8 hours early. The binary embeds time/tzdata, so TZName resolves anywhere.
+	TZName         string
+	TZOffsetHours  int
+
 	// Daily credit tasks: the app-side check-in (POST /v1/aimoss/task/sign, once a day,
 	// +50 灵力 measured) plus any task the account lists. The web frontend never calls
 	// these, but they answer web headers.
@@ -217,6 +224,8 @@ func LoadConfig() *Config {
 		StrictParams:        envBool("STRICT_PARAMS", false),
 		SignInEnabled:       envBool("SIGNIN_ENABLED", true),
 		SignInAt:            envStr("SIGNIN_AT", "00:05"),
+		TZName:              envStr("TZ_NAME", "Asia/Shanghai"),
+		TZOffsetHours:       envInt("TZ_OFFSET_HOURS", 8),
 
 		MaxBodyBytes:   int64(envInt("MAX_BODY_BYTES", 8<<20)),
 		MaxImageBytes:  int64(envInt("MAX_IMAGE_BYTES", 8<<20)),
