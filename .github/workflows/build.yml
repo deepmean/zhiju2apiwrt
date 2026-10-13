@@ -33,6 +33,8 @@ jobs:
           fi
       - name: vet
         run: go vet ./...
+      - name: self-test the ELF verifier (it is a release gate, so it gets tested too)
+        run: python3 .github/test_verify_elf.py
       - name: build (host)
         run: go build -trimpath -o /tmp/zhiju2api .
       - name: test
