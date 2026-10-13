@@ -121,7 +121,9 @@ func TestStatusesDoNotDeadlock(t *testing.T) {
 		if len(s) != 1 || s[0]["state"] != "ok" {
 			t.Fatalf("statuses = %v", s)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
+		// A deadlock never returns, so the budget only has to outlast a starved runner —
+		// at 2s this failed once on a loaded CI box, which is not what it is testing for.
 		t.Fatal("statuses() deadlocked on the token mutex")
 	}
 }
