@@ -149,7 +149,8 @@ th.nowrap,td.nowrap{white-space:nowrap}
   <div class="row" style="margin-bottom:10px">
     <div style="flex:0 0 auto"><label style="margin:0"><input type="checkbox" id="onlyimg" checked style="width:auto"> 只看图片模型</label></div>
     <div style="flex:0 0 auto"><label style="margin:0"><input type="checkbox" id="onlyfree" style="width:auto"> 只看免费/不限</label></div>
-    <div style="flex:0 0 auto"><button class="ghost" id="copycfg">复制所选模型的插件尺寸表</button></div>
+    <div style="flex:0 0 auto"><button class="ghost" id="copycfg">复制「自定义分辨率表」JSON</button></div>
+    <div style="flex:0 0 auto"><button class="ghost" id="copyyaml">复制 cordis.patch.yml 片段</button></div>
   </div>
   <div class="scroll"><table id="models"></table></div>
   <div class="hint">尺寸表由上游声明的「比例 × 分辨率档位」推算（长边 = 档位 ×1024）；网关收到任何近似像素都会吸附到最近的支持比例，所以像素是参考值。</div>
@@ -391,17 +392,38 @@ $('gatekey').onkeydown = function (e) { if (e.key === 'Enter') $('gatesave').onc
 $('reload').onclick = refresh;
 $('onlyimg').onchange = renderModels;
 $('onlyfree').onchange = renderModels;
-$('copycfg').onclick = function () {
+function selectedModel() {
   var id = state.selected;
-  if (!id) { say('先在表格里点一行选择模型', 'warn'); return; }
+  if (!id) { say('先在表格里点一行选择模型', 'warn'); return null; }
   var m = null;
   state.models.forEach(function (x) { if (x.id === id) m = x; });
-  if (!m || !m.size_table) { say('该模型没有尺寸表（不是图片模型，或上游未声明分辨率档位）', 'warn'); return; }
-  var cfg = { openaiCompatBaseURL: location.origin + '/v1', openaiCompatModel: m.id, openaiCompatSizes: m.size_table };
-  var text = JSON.stringify(cfg, null, 2);
+  if (!m) { say('找不到该模型', 'bad'); return null; }
+  if (!m.size_table) { say('该模型没有尺寸表（不是图片模型，或上游未声明分辨率档位）', 'warn'); return null; }
+  return m;
+}
+function put(text, note) {
   $('tokbox').value = text;
   if (navigator.clipboard) navigator.clipboard.writeText(text).catch(function () {});
-  say('已生成 ' + m.id + ' 的插件配置（openaiCompatSizes），已尝试复制到剪贴板', 'ok');
+  say(note, 'ok');
+}
+// The settings field wants ONLY the ratio table; the YAML block is for the config file.
+// Emitting the wrapper into the field is a paste that cannot work, which is exactly the
+// kind of thing that looks like the gateway's fault.
+$('copycfg').onclick = function () {
+  var m = selectedModel(); if (!m) return;
+  put(JSON.stringify(m.size_table, null, 2),
+    '已复制 ' + m.id + ' 的分辨率表 JSON —— 粘到插件设置的「自定义分辨率表（JSON）」');
+};
+$('copyyaml').onclick = function () {
+  var m = selectedModel(); if (!m) return;
+  var y = '- id: image-gen\n  name: dsh-image-gen\n  config:\n' +
+    '    provider: openai-compat\n' +
+    '    openaiCompatBaseURL: ' + location.origin + '/v1\n' +
+    '    openaiCompatModel: ' + m.id + '\n' +
+    '    openaiCompatEditFormat: multipart\n' +
+    '    openaiCompatEditExtra: {}\n' +
+    '    openaiCompatSizes: ' + JSON.stringify(m.size_table) + '\n';
+  put(y, '已复制 ' + m.id + ' 的 cordis.patch.yml 片段 —— 粘到 image-gen 那段 config 里');
 };
 $('send').onclick = function () {
   var phone = $('phone').value.trim();
