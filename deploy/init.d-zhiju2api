@@ -1,0 +1,51 @@
+#!/bin/sh /etc/rc.common
+# zhiju2api — OpenAI-compatible gateway for the 升智 (agent.zhijuai.com) web client.
+#
+#   /etc/init.d/zhiju2api start|stop|restart|status|enable
+#   logread -e zhiju2api
+#
+# Layout:
+#   /opt/zhiju2api/zhiju2api        the static binary (CI artifact)
+#   /opt/zhiju2api/zhiju2api.conf   KEY=VALUE config (chmod 600: it holds the API key)
+#   /opt/zhiju2api/tokens.txt       one upstream session token per line (chmod 600)
+#   /opt/zhiju2api/models.map       optional model_key=model_id overrides
+#
+# procd reads the conf file once at start: after editing it, restart the service.
+
+START=96
+STOP=10
+USE_PROCD=1
+
+PROG=/opt/zhiju2api/zhiju2api
+CONF=/opt/zhiju2api/zhiju2api.conf
+
+start_service() {
+	[ -x "$PROG" ] || {
+		logger -t zhiju2api "binary $PROG missing or not executable"
+		return 1
+	}
+
+	procd_open_instance
+	procd_set_param command "$PROG" -conf "$CONF"
+	# OpenWrt has no tzdata: musl only understands the POSIX form, and a zoneinfo name
+	# such as Asia/Shanghai silently falls back to UTC.
+	procd_set_param env TZ=CST-8
+	# Keep the heap small on a 250 MB router; the app lowers this itself too.
+	procd_set_param env GOGC=30
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	:
+}
+
+status_service() {
+	procd_running "zhiju2api" || return 1
+}
+
+reload_service() {
+	restart
+}

@@ -1,0 +1,51 @@
+# zhiju2api configuration — copy to /opt/zhiju2api/zhiju2api.conf and chmod 600.
+# Environment variables always win over this file.
+
+# --- serving ------------------------------------------------------------------------
+LISTEN=0.0.0.0:8080
+# Comma separated Bearer tokens your clients must send. Leave empty and the port is
+# open to anyone who can reach it (the startup log warns about this).
+API_KEY=sk-change-me
+LOG_LEVEL=INFO
+
+# --- upstream -----------------------------------------------------------------------
+UPSTREAM=https://agent.zhijuai.com
+TOKENS_FILE=/opt/zhiju2api/tokens.txt
+MODEL_MAP_FILE=/opt/zhiju2api/models.map
+
+# Protocol versions. The web client uses a different `ver` header per route family:
+#   /v2/ai/chat/turns   -> channelConfig.wholeApiVersion (3.2.0)
+#   /v1/aimoss/*        -> 2.2.11
+#   /v1/aimoss/repair/* -> 1.1.10
+# A wrong CHAT_VER is not rejected: every model answers `price_unavailable`, which
+# looks like an upstream outage. DISCOVER_VERSION reads it from /v1/aimoss/cfg/list at
+# boot; keep CHAT_VER as the fallback for when that call fails.
+CHAT_VER=3.2.0
+AIMOSS_VER=2.2.11
+REPAIR_VER=1.1.10
+DISCOVER_VERSION=true
+
+# --- request shaping ----------------------------------------------------------------
+# The web UI's 快速 (fast) toggle. With it off the shared slow lane answers
+# ret=10033 "您有任务正在执行" whenever it is busy.
+FAST_MODEL=true
+MAX_CONTEXT_ROUNDS=5
+
+# --- resource limits (the router is the constraint) ---------------------------------
+# Every request goes through one shared upstream account, so keep the image gate at 1:
+# the account allows a single image task at a time.
+CHAT_MAX_CONCURRENT=4
+IMAGE_MAX_CONCURRENT=1
+CHAT_TIMEOUT=5m
+IMAGE_TIMEOUT=5m
+POLL_INTERVAL=4s
+MAX_BODY_BYTES=8388608
+MAX_IMAGE_BYTES=8388608
+MAX_UPLOAD_BYTES=10485760
+
+# --- session upkeep -----------------------------------------------------------------
+# Heartbeat pings every token so a dead session shows up in /health before a client
+# request does; the token file is re-read this often, so replacing it needs no restart.
+HEARTBEAT_INTERVAL=30m
+TOKEN_RELOAD_INTERVAL=5s
+MODEL_CACHE_TTL=30m

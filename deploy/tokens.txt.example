@@ -1,0 +1,9 @@
+# one upstream session token per line; comments and blank lines are ignored
+#
+#   eyJhbGciOiJIUzI1NiIs...          raw JWT
+#   my-account=eyJhbGciOiJIUzI1NiIs  labelled (the label is only for logs)
+#
+# Where a token comes from: log in to https://agent.zhijuai.com in a browser, then run
+#   python3 tools/zhiju_token_sync.py --gateway http://<router>:8080 --key sk-... --push
+# or read it out of DevTools -> Application -> Local Storage -> SECRET_TOKEN (the
+# `data` field) and paste it here. chmod 600 this file.

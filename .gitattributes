@@ -1,0 +1,12 @@
+# Keep the tree byte-identical everywhere: the init script runs on the router under
+# busybox sh, where a CRLF line ending is a syntax error.
+* text=auto eol=lf
+*.go text eol=lf
+*.sh text eol=lf
+deploy/init.d-* text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.example text eol=lf
+*.png binary
+*.jpg binary

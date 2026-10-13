@@ -1,0 +1,14 @@
+# Optional overrides for the model_key -> numeric model_id mapping used by the image
+# routes. The gateway resolves most ids on its own:
+#   1. /v1/aimoss/repair/home_v2 gives model_group_key -> model_group_id (authoritative)
+#   2. /v1/account/get pairs display names with ids, matched back onto model_keys
+#   3. this file, which always wins
+#
+# Use it when a model the gateway could not place shows up as a 404, or to pin a
+# specific tier (for example a 4K variant of the same model family).
+#
+# format: model_key=model_id      (one per line, '#' comments allowed)
+
+# mj2=8                  # Midjourney V7 (the account catalog id)
+# nanobanana2=97         # 香蕉 Pro 2K
+# gptimage2=142          # ChatGPT Image 2 (2K)

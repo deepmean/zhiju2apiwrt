@@ -1,0 +1,22 @@
+# scratch analysis (browser captures, live tokens) — never published
+recon/
+cdp-profile*/
+cdp-profile2/
+cdp-profile3/
+ls_copy/
+token.txt
+turn_request.json
+turn_sse.txt
+image_requests.json
+*.ldb
+*.log.old
+
+# real secrets
+tokens.txt
+zhiju2api.conf
+models.map
+
+# build output
+dist/
+*.exe
+*.tar.gz

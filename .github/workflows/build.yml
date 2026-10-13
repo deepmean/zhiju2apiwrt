@@ -1,0 +1,131 @@
+name: build
+
+# Cloud build: no local Go toolchain is needed anywhere.
+#   push to main      -> test + build, refresh the rolling `latest` prerelease
+#   push a v* tag     -> test + build, publish a real release
+#   pull request      -> test + build only
+#   manual            -> Actions tab -> build -> Run workflow
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+      - name: vet
+        run: go vet ./...
+      - name: build (host)
+        run: go build -trimpath -o /tmp/zhiju2api .
+      - name: test
+        run: go test ./...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The target router: MediaTek MT7621 (ramips), MIPS32 little endian, no FPU.
+          # GOMIPS=softfloat is mandatory: a hard-float binary starts and then dies on
+          # the first floating point instruction.
+          - { goos: linux, goarch: mipsle, gomips: softfloat, out: zhiju2api-linux-mipsle }
+          - { goos: linux, goarch: mips,   gomips: softfloat, out: zhiju2api-linux-mips }
+          - { goos: linux, goarch: arm64,  gomips: '',        out: zhiju2api-linux-arm64 }
+          - { goos: linux, goarch: arm,    gomips: '',        goarm: '7', out: zhiju2api-linux-armv7 }
+          - { goos: linux, goarch: amd64,  gomips: '',        out: zhiju2api-linux-amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: false
+
+      - name: build ${{ matrix.out }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOMIPS: ${{ matrix.gomips }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME:-dev}-${GITHUB_SHA::7}" \
+            -o "dist/${{ matrix.out }}" .
+          ls -l dist/
+
+      - name: verify the binary really is what the router needs
+        run: python3 .github/verify_elf.py "dist/${{ matrix.out }}" "${{ matrix.goarch }}" "${{ matrix.gomips }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: package
+        run: |
+          ls -l dist
+          for f in dist/*; do
+            case "$(basename "$f")" in
+              *.tar.gz) ;;
+              *) tar -C dist -czf "$f.tar.gz" "$(basename "$f")" ;;
+            esac
+          done
+          ls -l dist
+
+      - name: publish rolling prerelease (main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: latest (rolling)
+          prerelease: true
+          files: dist/*
+          body: |
+            Rolling build of `${{ github.sha }}`.
+
+            Router install (MIPS32 little endian, soft float):
+
+            ```sh
+            wget -O /tmp/zhiju2api.new \
+              https://github.com/${{ github.repository }}/releases/download/latest/zhiju2api-linux-mipsle
+            chmod +x /tmp/zhiju2api.new
+            ```
+
+      - name: publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
