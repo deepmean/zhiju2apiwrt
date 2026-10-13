@@ -249,27 +249,63 @@ logread -e zhiju2api
 ## 7. 使用
 
 ```sh
-# 模型列表
+# 模型列表：真实名字 + 服务端报价（生成前就能看到花多少）
 curl http://192.168.26.1:8080/v1/models -H 'Authorization: Bearer sk-...'
+```
 
+```json
+{"id":"seedream4-image","name":"升智-1","upstream_key":"seedream4","upstream_id":148,
+ "family":"repair","capability":"image","unlimited":true,"change_num":80,"effective_change_num":0}
+{"id":"nanobanana2-image","name":"香蕉 Pro","upstream_key":"nanobanana2","upstream_id":97,
+ "unlimited":false,"change_num":420,"effective_change_num":416}
+{"id":"mj2-image","name":"Midjourney V7（高稳版）","upstream_key":"mj2","upstream_id":139}
+```
+
+- `change_num` = 上游标价（灵力），`effective_change_num` = **本账号实付**；
+- `unlimited:true` 的模型（如升智-1）不扣灵力；
+- `?prices=0` 跳过报价查询（只列名字，最快）；
+- 完整报价表按实付价排序：`GET /v1/models/prices`。
+
+每次对话/生图请求前，网关都会先问一次报价，写进日志并回在响应头上：
+
+```
+x-zhiju-list-cost: 10          # 标价
+x-zhiju-estimated-cost: 0      # 本账号实付
+```
+
+设 `MAX_COST_PER_REQUEST=200` 可以再加一道闸门：超过就 402，并在错误信息里点名该类型最便宜的模型。
+
+```sh
 # 对话（流式）
 curl -N http://192.168.26.1:8080/v1/chat/completions \
   -H 'Authorization: Bearer sk-...' -H 'Content-Type: application/json' \
   -d '{"model":"molica41","stream":true,
        "messages":[{"role":"user","content":"用一句话介绍你自己"}]}'
 
-# 生图
+# 生图（升智-1：免费且无限，1K）
 curl http://192.168.26.1:8080/v1/images/generations \
   -H 'Authorization: Bearer sk-...' -H 'Content-Type: application/json' \
-  -d '{"model":"banana21-image","prompt":"一只柯基犬在草地上奔跑，写实摄影","size":"1024x1024"}'
+  -d '{"model":"seedream4-image","prompt":"一只柯基犬在草地上奔跑，写实摄影","size":"1024x1024","image_size":"1K"}'
 
 # 改图（OpenAI multipart 形状）
 curl http://192.168.26.1:8080/v1/images/edits \
   -H 'Authorization: Bearer sk-...' \
-  -F model=banana21-image-edit -F 'prompt=把背景换成雪山' -F image=@photo.png
+  -F model=seedream4-image-edit -F 'prompt=把背景换成雪山，保留主体' -F image=@photo.png
 ```
 
 任何 OpenAI 客户端都能直接接：把 base_url 指向 `http://<router>:8080/v1`，模型名用 `/v1/models` 里的。
+
+### 实测结果（JCG-Q20 / OpenWrt 24.10.5 / mipsel_24kc）
+
+| 链路 | 结果 |
+| --- | --- |
+| `/v1/models` | 39 个条目，57 个 id 已解析，名字+价格齐全 |
+| 非流式对话 `molica41` | 200，3.0s，内容正确，`x-zhiju-estimated-cost: 0` |
+| 流式对话 `molica41` | 200，首 token 1.3s，总 2.3s |
+| 生图 `seedream4-image`（升智-1） | 200，32.9s，返回 PNG 直链 |
+| 改图 `seedream4-image-edit` | 200，76.4s，**输出与输入不同**（背景草地→雪山，主体保留） |
+| 进程内存 | 堆分配 ~0.9MB（`/health` 的 `mem_alloc_mb`） |
+
 
 ---
 
