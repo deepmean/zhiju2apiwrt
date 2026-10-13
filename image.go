@@ -278,7 +278,22 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.ImageTimeout)
 	defer cancel()
 
-	urls, err := s.generate(ctx, res, opts)
+	// Meter the real cost: read the balance before and after and record the difference.
+	// The upstream quote is what the billing module predicts, not what it takes — a chat
+	// model quoting 0 灵力 was measured deducting 48 per turn.
+	balanceBefore := s.balanceOf(ctx)
+	urls, sessionID, err := s.generate(ctx, res, opts)
+	balanceAfter := s.balanceOf(ctx)
+	if s.records != nil && sessionID != "" && balanceBefore >= 0 && balanceAfter >= 0 {
+		actual := balanceBefore - balanceAfter
+		quoted := 0
+		if price, perr := s.c.PriceOf(ctx, res.Key, "draw", res.ID, "draw"); perr == nil && price != nil {
+			quoted = price.Effective
+		}
+		logf("INFO", "measured cost for %s: quoted=%d 灵力, actual=%d 灵力 (balance %d -> %d)",
+			res.Key, quoted, actual, balanceBefore, balanceAfter)
+		s.records.SetCost(sessionID, quoted, actual)
+	}
 	if err != nil {
 		s.writeUpstreamErr(w, err)
 		return
@@ -286,15 +301,26 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	s.writeImages(w, req, urls)
 }
 
+// balanceOf reads the credit balance, or -1 when it cannot be read.
+func (s *Server) balanceOf(ctx context.Context) int {
+	if s.c == nil {
+		return -1
+	}
+	if bal, _, err := s.c.Balance(ctx); err == nil {
+		return bal
+	}
+	return -1
+}
+
 // generate starts one image task and polls it to completion.
-func (s *Server) generate(ctx context.Context, res Resolved, opts *genOptions) ([]string, error) {
+func (s *Server) generate(ctx context.Context, res Resolved, opts *genOptions) ([]string, string, error) {
 	if res.Kind == "mj" {
 		return s.generateMJ(ctx, res, opts)
 	}
 	return s.generateRepair(ctx, res, opts)
 }
 
-func (s *Server) generateMJ(ctx context.Context, res Resolved, opts *genOptions) ([]string, error) {
+func (s *Server) generateMJ(ctx context.Context, res Resolved, opts *genOptions) ([]string, string, error) {
 	// The draw page sends the ratio as check_params_v2[{param_key:"aspect"}]; verified
 	// against a real 4:3 request that came back 1024x772.
 	params := []map[string]string{}
@@ -320,10 +346,10 @@ func (s *Server) generateMJ(ctx context.Context, res Resolved, opts *genOptions)
 	}
 	var created drawCreateResp
 	if err := s.c.call(ctx, kindIOS, "/v1/aimoss/draw/create", body, &created); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if created.SessionID == "" {
-		return nil, fmt.Errorf("draw/create returned no session_id")
+		return nil, "", fmt.Errorf("draw/create returned no session_id")
 	}
 	if s.records != nil {
 		s.records.Add("mj", created.SessionID, res.Key, opts.Prompt)
@@ -333,7 +359,7 @@ func (s *Server) generateMJ(ctx context.Context, res Resolved, opts *genOptions)
 	deadline := time.Now().Add(s.cfg.ImageTimeout)
 	for time.Now().Before(deadline) {
 		if err := sleepCtx(ctx, s.cfg.PollInterval); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		var page drawPage
 		if err := s.c.call(ctx, kindV1, "/v1/aimoss/draw/message/page",
@@ -342,13 +368,13 @@ func (s *Server) generateMJ(ctx context.Context, res Resolved, opts *genOptions)
 			continue
 		}
 		if urls := pickDrawURLs(page); len(urls) > 0 {
-			return urls, nil
+			return urls, created.SessionID, nil
 		}
 	}
-	return nil, fmt.Errorf("midjourney task did not finish within %s", s.cfg.ImageTimeout)
+	return nil, "", fmt.Errorf("midjourney task did not finish within %s", s.cfg.ImageTimeout)
 }
 
-func (s *Server) generateRepair(ctx context.Context, res Resolved, opts *genOptions) ([]string, error) {
+func (s *Server) generateRepair(ctx context.Context, res Resolved, opts *genOptions) ([]string, string, error) {
 	inputURLs := opts.InputURLs
 	if inputURLs == nil {
 		inputURLs = []string{}
@@ -371,24 +397,24 @@ func (s *Server) generateRepair(ctx context.Context, res Resolved, opts *genOpti
 		if ue, ok := err.(*errUpstream); ok && (ue.Ret == 10033 || ue.Ret == 500) {
 			for i := 0; i < 6; i++ {
 				if err := sleepCtx(ctx, 8*time.Second); err != nil {
-					return nil, err
+					return nil, "", err
 				}
 				if err = s.c.call(ctx, kindIOS, "/v1/aimoss/repair/async/create", body, &created); err == nil {
 					break
 				}
 				if ue2, ok := err.(*errUpstream); !ok || (ue2.Ret != 10033 && ue2.Ret != 500) {
-					return nil, err
+					return nil, "", err
 				}
 			}
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 		} else {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	if created.SessionID == "" {
-		return nil, fmt.Errorf("repair/async/create returned no session_id")
+		return nil, "", fmt.Errorf("repair/async/create returned no session_id")
 	}
 	if s.records != nil {
 		s.records.Add("image", created.SessionID, res.Key, opts.Prompt)
@@ -398,7 +424,7 @@ func (s *Server) generateRepair(ctx context.Context, res Resolved, opts *genOpti
 	deadline := time.Now().Add(s.cfg.ImageTimeout)
 	for time.Now().Before(deadline) {
 		if err := sleepCtx(ctx, s.cfg.PollInterval); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		var page repairPage
 		if err := s.c.call(ctx, kindV1, "/v1/aimoss/repair/web/list_msg",
@@ -407,16 +433,16 @@ func (s *Server) generateRepair(ctx context.Context, res Resolved, opts *genOpti
 			continue
 		}
 		if urls := pickRepairURLs(page); len(urls) > 0 {
-			return urls, nil
+			return urls, created.SessionID, nil
 		}
 		if status, text := terminalRepairState(page); status == "failure" {
 			if text == "" {
 				text = "图片生成失败"
 			}
-			return nil, fmt.Errorf("upstream image task failed: %s", text)
+			return nil, "", fmt.Errorf("upstream image task failed: %s", text)
 		}
 	}
-	return nil, fmt.Errorf("image task did not finish within %s", s.cfg.ImageTimeout)
+	return nil, "", fmt.Errorf("image task did not finish within %s", s.cfg.ImageTimeout)
 }
 
 func (s *Server) writeImages(w http.ResponseWriter, req imageRequest, urls []string) {
@@ -531,7 +557,19 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	logf("INFO", "input image uploaded: %s", objectURL)
 	opts.InputURLs = []string{objectURL}
 
-	urls, err := s.generate(ctx, res, opts)
+	balanceBefore := s.balanceOf(ctx)
+	urls, sessionID, err := s.generate(ctx, res, opts)
+	balanceAfter := s.balanceOf(ctx)
+	if s.records != nil && sessionID != "" && balanceBefore >= 0 && balanceAfter >= 0 {
+		actual := balanceBefore - balanceAfter
+		quoted := 0
+		if price, perr := s.c.PriceOf(ctx, res.Key, "draw", res.ID, "draw"); perr == nil && price != nil {
+			quoted = price.Effective
+		}
+		logf("INFO", "measured cost for %s (edit): quoted=%d 灵力, actual=%d 灵力 (balance %d -> %d)",
+			res.Key, quoted, actual, balanceBefore, balanceAfter)
+		s.records.SetCost(sessionID, quoted, actual)
+	}
 	if err != nil {
 		s.writeUpstreamErr(w, err)
 		return

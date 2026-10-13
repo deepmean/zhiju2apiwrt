@@ -49,6 +49,12 @@ type Config struct {
 	// never be reached by a typo or a client that picks the first model in the list.
 	MJEnabled bool
 
+	// Daily credit tasks: the app-side check-in (POST /v1/aimoss/task/sign, once a day,
+	// +50 灵力 measured) plus any task the account lists. The web frontend never calls
+	// these, but they answer web headers.
+	SignInEnabled bool
+	SignInAt      string // local HH:MM
+
 	ChatMaxConcurrent  int
 	ImageMaxConcurrent int
 
@@ -209,6 +215,8 @@ func LoadConfig() *Config {
 		SMSCodeFile:         envStr("SMS_CODE_FILE", "/tmp/zhiju-sms-code"),
 		PromptLimitMode:     strings.ToLower(envStr("PROMPT_LIMIT_MODE", "off")),
 		StrictParams:        envBool("STRICT_PARAMS", false),
+		SignInEnabled:       envBool("SIGNIN_ENABLED", true),
+		SignInAt:            envStr("SIGNIN_AT", "00:05"),
 
 		MaxBodyBytes:   int64(envInt("MAX_BODY_BYTES", 8<<20)),
 		MaxImageBytes:  int64(envInt("MAX_IMAGE_BYTES", 8<<20)),

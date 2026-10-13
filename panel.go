@@ -159,6 +159,18 @@ th.nowrap,td.nowrap{white-space:nowrap}
 </section>
 
 <section>
+  <h3>每日签到 / 积分任务</h3>
+  <div class="hint">签到一天一次（实测 <b>+50 灵力</b>），定时在 <span class="mono" id="signat"></span> 执行；网关启动后 20 秒也会补跑一次（幂等，重复调用返回"已经签到"）。任务列表出现内容时会自动做完。</div>
+  <div class="grid" id="daily" style="margin-top:10px"></div>
+  <div class="row" style="margin-top:10px">
+    <div style="flex:0 0 auto"><button id="taskrun">立即执行</button></div>
+    <div style="flex:0 0 auto"><button class="ghost" id="taskreload">刷新</button></div>
+  </div>
+  <div class="scroll" style="margin-top:10px"><table id="tasklist"></table></div>
+  <div id="taskmsg" class="hint"></div>
+</section>
+
+<section>
   <h3>模型</h3>
   <div class="row" style="margin-bottom:10px">
     <div style="flex:0 0 auto"><label style="margin:0"><input type="checkbox" id="onlyimg" checked style="width:auto"> 只看图片模型</label></div>
@@ -347,6 +359,47 @@ $('recdelall').onclick = function () {
   deleteRecords({ all: true }, '删除全部');
 };
 
+// --- daily credit tasks -------------------------------------------------------------
+function renderTasks(t) {
+  var d = t.daily || {};
+  $('signat').textContent = d.at || '-';
+  var cards = [
+    ['开关', d.enabled ? '已启用' : '未启用'],
+    ['定时', d.at || '-'],
+    ['上次执行', d.last_run ? String(d.last_run).replace('T', ' ').slice(0, 19) : '-'],
+    ['下次执行', d.next_run ? String(d.next_run).replace('T', ' ').slice(0, 19) : '-'],
+    ['结果', d.last_result || '-'],
+    ['当前余额', t.balance === undefined ? '-' : t.balance]
+  ];
+  $('daily').innerHTML = cards.map(function (kv) {
+    return '<div class="kv"><i>' + kv[0] + '</i><b>' + esc(kv[1]) + '</b></div>';
+  }).join('');
+
+  var rows = ['<tr><th>任务 id</th><th>标题</th><th class="num">灵力</th><th>状态</th></tr>'];
+  var tasks = t.tasks || [];
+  if (!tasks.length) {
+    rows.push('<tr><td colspan="4" class="sub">上游任务列表为空' + (t.task_error ? '（读取失败：' + esc(t.task_error) + '）' : '') + '</td></tr>');
+  } else {
+    tasks.forEach(function (x) {
+      rows.push('<tr><td class="mono">' + esc(x.ID || '') + '</td><td>' + esc(x.Title || '') + '</td>' +
+        '<td class="num">' + (x.Integral || 0) + '</td><td>' + (x.Status === 1 ? '<span class="tag ok">已完成</span>' : '<span class="tag warn">待完成</span>') + '</td></tr>');
+    });
+  }
+  $('tasklist').innerHTML = rows.join('');
+}
+function loadTasks() {
+  return api('/admin/tasks')
+    .then(function (t) { renderTasks(t); })
+    .catch(function (e) { $('taskmsg').textContent = '读取失败：' + e.message; });
+}
+$('taskreload').onclick = loadTasks;
+$('taskrun').onclick = function () {
+  $('taskmsg').textContent = '正在执行…';
+  api('/admin/tasks/run', { method: 'POST', body: '{}' })
+    .then(function (r) { $('taskmsg').textContent = '已执行：' + ((r.daily && r.daily.last_result) || ''); loadTasks(); })
+    .catch(function (e) { $('taskmsg').textContent = '执行失败：' + e.message; });
+};
+
 function refresh() {
   $('clock').textContent = new Date().toLocaleTimeString();
   if (!(storedKey() || state.memKey)) { showGate(''); return Promise.resolve(); }
@@ -356,7 +409,7 @@ function refresh() {
       renderSession(r[0]); renderModels(); renderAccount(r[2]);
       $('keyState').textContent = '已连接 ' + location.host + '，每 30 秒自动刷新';
       say('');
-      return loadRecords();
+      return Promise.all([loadRecords(), loadTasks()]);
     })
     .catch(function (e) {
       say('读取失败：' + e.message, 'bad');

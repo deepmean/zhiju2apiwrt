@@ -65,6 +65,9 @@ type Server struct {
 	// handed back on its own (from a forwarder, or a file) without repeating the number.
 	pendMu sync.Mutex
 	pend   *pendingLogin
+
+	// Daily credit tasks (check-in + task sweep) and what the last run did.
+	daily dailyState
 }
 
 func main() {
@@ -132,6 +135,9 @@ func main() {
 	go pool.StartMaintenance(client, stop)
 	// Accept a verification code dropped into a file, so renewing needs no JSON at all.
 	go srv.watchSMSCodeFile(stop)
+	// The daily check-in pays credits; run it once shortly after boot (idempotent, so a
+	// restart cannot miss the day) and then every day at SIGNIN_AT.
+	go srv.startDailyTasks(stop)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", srv.auth(srv.handleModels))
@@ -156,6 +162,8 @@ func main() {
 	mux.HandleFunc("/admin/account", srv.auth(srv.handleAccount))
 	mux.HandleFunc("/admin/records", srv.auth(srv.handleRecords))
 	mux.HandleFunc("/admin/records/delete", srv.auth(srv.handleRecordsDelete))
+	mux.HandleFunc("/admin/tasks", srv.auth(srv.handleTasks))
+	mux.HandleFunc("/admin/tasks/run", srv.auth(srv.handleTasksRun))
 	mux.HandleFunc("/admin/push", srv.handlePush) // key may arrive in ?key= (cross-origin)
 	mux.HandleFunc("/admin/session", srv.auth(srv.handleSession))
 	mux.HandleFunc("/admin/login/sms", srv.auth(srv.handleLoginSMS))
@@ -249,6 +257,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"tokens":       s.pool.statuses(),
 		"token_count":  len(s.pool.All()),
 		"catalog":      s.cat.Status(),
+		"daily":        s.dailySnapshot(),
 		"goroutines":   runtime.NumGoroutine(),
 		"mem_alloc_mb": memAllocMB(),
 	})

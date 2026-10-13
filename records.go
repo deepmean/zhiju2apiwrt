@@ -24,6 +24,14 @@ type APIRecord struct {
 	CreatedAt time.Time `json:"created_at"`
 	Deleted   bool      `json:"deleted,omitempty"`
 	DeletedAt time.Time `json:"deleted_at,omitempty"`
+
+	// CostQuoted is what the upstream billing module predicted (change_num_result), and
+	// CostActual is what the balance actually moved by. They are recorded separately on
+	// purpose: the quote is not a guarantee — the model the site labels 实付=0 for chat
+	// turned out to deduct 48 灵力 per turn, while 升智-1 really did cost 0.
+	CostQuoted int `json:"cost_quoted,omitempty"`
+	CostActual int `json:"cost_actual,omitempty"`
+	CostKnown  bool `json:"cost_known,omitempty"`
 }
 
 // RecordLedger keeps the ledger, bounded, on disk so it survives a restart.
@@ -115,6 +123,38 @@ func (l *RecordLedger) MarkDeleted(sessionIDs ...string) {
 	path := l.path
 	l.mu.Unlock()
 	writeLedger(path, snapshot)
+}
+
+// SetCost records what a request actually cost, next to what was quoted.
+func (l *RecordLedger) SetCost(sessionID string, quoted, actual int) {
+	if sessionID == "" {
+		return
+	}
+	l.mu.Lock()
+	for i := range l.items {
+		if l.items[i].SessionID == sessionID {
+			l.items[i].CostQuoted = quoted
+			l.items[i].CostActual = actual
+			l.items[i].CostKnown = true
+		}
+	}
+	snapshot := append([]APIRecord(nil), l.items...)
+	path := l.path
+	l.mu.Unlock()
+	writeLedger(path, snapshot)
+}
+
+// MeasuredCost reports the most recent measured deduction for a model, which is the only
+// number worth showing as "what it costs": the quote can be wrong by a lot.
+func (l *RecordLedger) MeasuredCost(modelKey string) (int, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := len(l.items) - 1; i >= 0; i-- {
+		if l.items[i].Model == modelKey && l.items[i].CostKnown {
+			return l.items[i].CostActual, true
+		}
+	}
+	return 0, false
 }
 
 // List returns the ledger, newest first.

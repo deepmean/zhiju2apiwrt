@@ -106,6 +106,18 @@ SMS_CODE_FILE=/tmp/zhiju-sms-code
 #   off (default) | warn (log and send) | enforce (400)
 PROMPT_LIMIT_MODE=off
 
+# --- daily credit tasks -------------------------------------------------------------
+# The app-side check-in (POST /v1/aimoss/task/sign) pays credits once a day — measured at
+# +50 灵力. The web frontend never calls it, but it answers web headers. The job also walks
+# /v1/aimoss/task/list and finishes whatever it finds there (that list is empty for this
+# account today, so the finish payload is untested; the item shape is logged when it
+# appears).
+#
+# The job also runs ~20s after boot, which is idempotent (a second call answers
+# ret=2016 "已经签到"), so a restart never misses the day.
+SIGNIN_ENABLED=true
+SIGNIN_AT=00:05
+
 # STRICT_PARAMS: the aspect ratios and resolution tiers are declared per model, but an
 # unlisted value has not been shown to be refused upstream. Off by default, the request is
 # passed through and the provider's error comes back verbatim; on, an unsupported value is

@@ -124,8 +124,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	// Pre-flight: ask the upstream billing module what this turn costs, log it, expose it
 	// on the response headers, and refuse it when a ceiling is configured.
-	if price := s.annotate(r.Context(), w, res.Key, "text", s.cat.IDOf(res.Key)); !s.guard(w, price) {
+	price := s.annotate(r.Context(), w, res.Key, "text", s.cat.IDOf(res.Key))
+	if !s.guard(w, price) {
 		return
+	}
+	// Meter what it really costs. The quote and the deduction disagree in practice: a chat
+	// model quoting 0 灵力 was measured deducting 48 per turn, so both get recorded.
+	meter := &costMeter{modelKey: res.Key, before: s.balanceOf(r.Context())}
+	if price != nil {
+		meter.quoted = price.Effective
 	}
 
 	fast := s.cfg.FastModel
@@ -150,13 +157,37 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	defer func() { <-s.c.chatGate }()
 
 	if req.Stream {
-		s.streamChat(w, r, req, body)
+		s.streamChat(w, r, req, body, meter)
 		return
 	}
-	s.bufferedChat(w, r, req, body)
+	s.bufferedChat(w, r, req, body, meter)
 }
 
-func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req chatRequest, body turnRequest) {
+// costMeter carries the pre-flight state needed to report the real deduction afterwards.
+type costMeter struct {
+	modelKey string
+	quoted   int
+	before   int
+}
+
+// finish records the measured cost against the session the turn created.
+func (s *Server) finishMeter(ctx context.Context, m *costMeter, sessionID string) {
+	if m == nil || sessionID == "" {
+		return
+	}
+	after := s.balanceOf(ctx)
+	if m.before < 0 || after < 0 {
+		return
+	}
+	actual := m.before - after
+	logf("INFO", "measured cost for %s: quoted=%d 灵力, actual=%d 灵力 (balance %d -> %d)",
+		m.modelKey, m.quoted, actual, m.before, after)
+	if s.records != nil {
+		s.records.SetCost(sessionID, m.quoted, actual)
+	}
+}
+
+func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req chatRequest, body turnRequest, meter *costMeter) {
 	flusher, _ := w.(http.Flusher)
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.ChatTimeout)
 	defer cancel()
@@ -177,6 +208,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req chatRequ
 	created := time.Now().Unix()
 	sentRole := false
 	failed := false
+	turnSession := ""
 
 	send := func(delta chatOutMsg, finish string) {
 		chunk := chatResponse{
@@ -205,6 +237,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req chatRequ
 		// request creates, so the ledger learns it here.
 		if te.SessionID != "" && s.records != nil {
 			s.records.Add("chat", te.SessionID, req.Model, body.Data.Prompt)
+			turnSession = te.SessionID
 		}
 		switch te.Type {
 		case "turn.started", "model.started":
@@ -254,9 +287,11 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, req chatRequ
 	if flusher != nil {
 		flusher.Flush()
 	}
+	// Report what the turn really cost, next to the pre-flight quote.
+	s.finishMeter(context.Background(), meter, turnSession)
 }
 
-func (s *Server) bufferedChat(w http.ResponseWriter, r *http.Request, req chatRequest, body turnRequest) {
+func (s *Server) bufferedChat(w http.ResponseWriter, r *http.Request, req chatRequest, body turnRequest, meter *costMeter) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.ChatTimeout)
 	defer cancel()
 
@@ -269,6 +304,7 @@ func (s *Server) bufferedChat(w http.ResponseWriter, r *http.Request, req chatRe
 
 	var content, reasoning strings.Builder
 	var failCode, failMsg string
+	turnSession := ""
 	_ = readSSE(resp.Body, func(ev sseEvent) error {
 		if len(ev.Data) == 0 {
 			return nil
@@ -282,6 +318,7 @@ func (s *Server) bufferedChat(w http.ResponseWriter, r *http.Request, req chatRe
 		}
 		if te.SessionID != "" && s.records != nil {
 			s.records.Add("chat", te.SessionID, req.Model, body.Data.Prompt)
+			turnSession = te.SessionID
 		}
 		switch te.Type {
 		case "message.delta":
@@ -297,6 +334,7 @@ func (s *Server) bufferedChat(w http.ResponseWriter, r *http.Request, req chatRe
 
 	if failCode != "" && content.Len() == 0 {
 		writeOpenAIError(w, upstreamStatus(failCode), "upstream_error", turnErrorText(failCode)+" ("+failCode+")")
+		s.finishMeter(context.Background(), meter, turnSession)
 		return
 	}
 	_ = failMsg
@@ -310,6 +348,7 @@ func (s *Server) bufferedChat(w http.ResponseWriter, r *http.Request, req chatRe
 		}},
 	}
 	writeJSON(w, http.StatusOK, out)
+	s.finishMeter(context.Background(), meter, turnSession)
 }
 
 // openTurn starts one upstream turn and returns the raw event stream.
