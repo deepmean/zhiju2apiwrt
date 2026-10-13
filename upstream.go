@@ -260,6 +260,75 @@ func (c *Client) Ping(tok *Token) error {
 	return nil
 }
 
+// callAnon is call() without a session token: the login routes are the only ones that
+// must work while every stored token is dead.
+func (c *Client) callAnon(ctx context.Context, kind reqKind, path string, body any, out any) error {
+	raw, err := c.postJSON(ctx, kind, nil, path, body)
+	if err != nil {
+		return err
+	}
+	var env apiResp
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return fmt.Errorf("decode %s: %w (body: %.200s)", path, err, raw)
+	}
+	if env.Ret != 1 {
+		return &errUpstream{Ret: env.Ret, Msg: env.Msg}
+	}
+	if out != nil && len(env.Data) > 0 {
+		if err := json.Unmarshal(env.Data, out); err != nil {
+			return fmt.Errorf("decode data of %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// SendLoginSMS asks the upstream to text a verification code to the account's phone.
+// The upstream expects type=3 for the web login flow.
+func (c *Client) SendLoginSMS(ctx context.Context, phone string, typ int) error {
+	if typ == 0 {
+		typ = 3
+	}
+	var data map[string]any
+	return c.callAnon(ctx, kindV1, "/v1/account/binding/send_sms_v2", map[string]any{
+		"phone_number": phone,
+		"type":         typ,
+	}, &data)
+}
+
+// PhoneLogin exchanges phone + SMS code for a fresh session token. This is the only way
+// to renew a session: there is no refresh_token and no cookie anywhere in this API.
+func (c *Client) PhoneLogin(ctx context.Context, phone, code, invitation string) (string, map[string]any, error) {
+	var data struct {
+		Token string         `json:"token"`
+		User  map[string]any `json:"user"`
+	}
+	err := c.callAnon(ctx, kindV1, "/v1/account/phone_login", map[string]any{
+		"platform":          6,
+		"phone":             phone,
+		"verification_code": code,
+		"invitation_code":   invitation,
+	}, &data)
+	if err != nil {
+		return "", nil, err
+	}
+	if data.Token == "" {
+		return "", nil, fmt.Errorf("phone_login returned no token")
+	}
+	return data.Token, data.User, nil
+}
+
+// Balance reads the credit balance (灵力) the account has left.
+func (c *Client) Balance(ctx context.Context) (int, string, error) {
+	var data struct {
+		IntegralBalance int    `json:"integral_balance"`
+		ExpireTime      string `json:"expire_time"`
+	}
+	if err := c.call(ctx, kindV1, "/v1/integral/balance/query", map[string]any{}, &data); err != nil {
+		return 0, "", err
+	}
+	return data.IntegralBalance, data.ExpireTime, nil
+}
+
 // CfgList fetches the web client's channel config. It answers only the iOS platform
 // (plat:web_browser gets ret=10002 不支持的平台) and carries two things this gateway
 // needs: channelConfig.wholeApiVersion for the chat route, and the full model table with

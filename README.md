@@ -146,7 +146,7 @@ image-78                 -> 直接按数字 id 调用（排障用）
 ## 4. 会话保活（这一节是重点）
 
 上游**没有** `refresh_token`，**没有** cookie，**没有**滑动续期：JWT 里是固定 `exp`
-（约 100 天），过期后只能手机号 + 短信验证码重新登录。所以"自动刷新登录"在本项目里落地为三件事：
+（约 100 天），过期后只能手机号 + 短信验证码重新登录。所以"自动刷新登录"在本项目里落地为四件事：
 
 1. **热加载**：`tokens.txt` 每 `TOKEN_RELOAD_INTERVAL`（默认 5s）检查 mtime，改了立刻生效，**不用重启**。
 2. **心跳**：每 `HEARTBEAT_INTERVAL`（默认 30 分钟）对每个 token 调一次 `/v1/account/get`；
@@ -161,10 +161,28 @@ python3 tools/zhiju_token_sync.py --gateway http://192.168.26.1:8080 --key sk-..
 python3 tools/zhiju_token_sync.py --gateway http://192.168.26.1:8080 --key sk-... --watch 600
 ```
 
+4. **路由器自己完成登录**：令牌彻底失效时，不必改文件、不必重启，网关可以自己走完
+   手机号登录流程并立刻启用新令牌：
+
+```sh
+# ① 让上游发验证码到你手机
+curl -X POST http://192.168.26.1:8080/admin/login/sms \
+  -H 'Authorization: Bearer sk-...' -H 'Content-Type: application/json' \
+  -d '{"phone":"136xxxxxxxx"}'
+
+# ② 带上验证码登录；网关存下新令牌并立即使用（会自动刷新目录与价格缓存）
+curl -X POST http://192.168.26.1:8080/admin/login \
+  -H 'Authorization: Bearer sk-...' -H 'Content-Type: application/json' \
+  -d '{"phone":"136xxxxxxxx","code":"123456"}'
+
+# 随时查当前账号状态：余额、令牌健康、协议版本
+curl http://192.168.26.1:8080/admin/session -H 'Authorization: Bearer sk-...'
+```
+
 多账号就往 `tokens.txt` 里多写几行，网关轮询使用；某个号被上游拒绝会自动跳过。
 
-> 老实说：如果 JWT 真的过期了，任何脚本都换不出新的（要短信验证码）。
-> 本项目的价值是**让过期的瞬间是可观测、可热替换的**，而不是静默地全站 401。
+> 老实说：**路由器造不出新令牌**——要短信验证码，这一步必须有人参与（或由电脑侧常驻脚本代劳）。
+> 本项目做的是让"失效"和"续期"都是可观测、可一键完成的，而不是静默地全站 401。
 
 ---
 

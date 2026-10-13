@@ -212,6 +212,51 @@ func (p *Pool) Replace(values []string) error {
 	return nil
 }
 
+// Add appends freshly obtained tokens (a login) and writes them back, keeping the
+// existing ones. A token already present is left alone so its runtime state survives.
+func (p *Pool) Add(values ...string) (int, error) {
+	p.mu.Lock()
+	existing := map[string]bool{}
+	for _, t := range p.tokens {
+		existing[t.Value] = true
+	}
+	added := 0
+	for _, v := range values {
+		v = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "Bearer "))
+		if v == "" || existing[v] {
+			continue
+		}
+		t := &Token{Value: v, lastSeen: time.Now()}
+		if uid, user, exp, ok := parseJWT(v); ok {
+			t.UID, t.Username, t.Exp = uid, user, exp
+		}
+		p.tokens = append(p.tokens, t)
+		existing[v] = true
+		added++
+	}
+	var sb strings.Builder
+	for _, t := range p.tokens {
+		sb.WriteString(t.Value)
+		sb.WriteString("\n")
+	}
+	path := p.path
+	p.mu.Unlock()
+
+	if added == 0 {
+		return 0, nil
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0o600); err != nil {
+		return added, err
+	}
+	if st, err := os.Stat(path); err == nil {
+		p.mu.Lock()
+		p.mtime, p.size = st.ModTime(), st.Size()
+		p.mu.Unlock()
+	}
+	logf("INFO", "token pool: %d token(s) added via login, %d total", added, len(p.All()))
+	return added, nil
+}
+
 func (p *Pool) All() []*Token {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

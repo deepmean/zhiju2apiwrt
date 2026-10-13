@@ -133,6 +133,9 @@ func main() {
 	mux.HandleFunc("/v1/images/edits", srv.auth(srv.handleImageEdits))
 	mux.HandleFunc("/health", srv.handleHealth)
 	mux.HandleFunc("/admin/tokens", srv.auth(srv.handleAdminTokens))
+	mux.HandleFunc("/admin/session", srv.auth(srv.handleSession))
+	mux.HandleFunc("/admin/login/sms", srv.auth(srv.handleLoginSMS))
+	mux.HandleFunc("/admin/login", srv.auth(srv.handleLogin))
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
