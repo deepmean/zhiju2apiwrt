@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +63,48 @@ func (p *ModelParams) AllowsSize(v string) bool {
 		return true
 	}
 	return contains(p.ImageSizes, strings.ToUpper(v))
+}
+
+// SnapAspect maps a pixel-derived ratio onto the closest ratio the model supports.
+//
+// This exists because OpenAI-style clients do not send ratios, they send pixels: the
+// dsh image-gen plugin turns its `openaiCompatSizes` table into `size: "2048x1365"`, and
+// a greatest-common-divisor reduction of that is "2048:1365" — a value no model lists.
+// Comparing the ratios numerically (within a few percent) recovers "3:2" and keeps the
+// request valid without the client having to know anything about the upstream.
+func (p *ModelParams) SnapAspect(requested string) (string, bool) {
+	rv, ok := ratioValue(requested)
+	if !ok {
+		return "", false
+	}
+	best, bestDiff := "", 0.0
+	for _, cand := range p.AspectRatios {
+		cv, ok := ratioValue(cand)
+		if !ok {
+			continue // "" and "auto" are not numeric ratios
+		}
+		d := math.Abs(math.Log(rv / cv))
+		if best == "" || d < bestDiff {
+			best, bestDiff = cand, d
+		}
+	}
+	if best == "" || bestDiff > 0.05 { // > ~5% off is a different ratio, not a rounding
+		return "", false
+	}
+	return best, true
+}
+
+func ratioValue(s string) (float64, bool) {
+	parts := strings.Split(strings.TrimSpace(s), ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	w, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	h, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if err1 != nil || err2 != nil || w <= 0 || h <= 0 {
+		return 0, false
+	}
+	return w / h, true
 }
 
 func contains(list []string, v string) bool {

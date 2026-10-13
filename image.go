@@ -63,10 +63,17 @@ func (s *Server) prepareImageOptions(ctx context.Context, w http.ResponseWriter,
 	}
 	if p != nil {
 		if aspect != "" && !p.AllowsAspect(aspect) {
-			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
-				"model %s does not accept aspect_ratio %q; supported: %s",
-				res.Key, aspect, strings.Join(append(append([]string{}, p.AspectRatios...), `"" (auto)`), ", ")))
-			return nil, false
+			// A pixel-derived ratio ("2048x1365" -> "2048:1365") is not what any model
+			// lists; snap it to the nearest supported one before refusing.
+			if snapped, ok := p.SnapAspect(aspect); ok {
+				logf("INFO", "aspect %s snapped to %s for model %s", aspect, snapped, res.Key)
+				aspect = snapped
+			} else {
+				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
+					"model %s does not accept aspect_ratio %q; supported: %s",
+					res.Key, aspect, strings.Join(append(append([]string{}, p.AspectRatios...), `"" (auto)`), ", ")))
+				return nil, false
+			}
 		}
 		if aspect == "" {
 			aspect = p.DefaultAspect

@@ -62,3 +62,33 @@ func TestRatioFromSizeDerivation(t *testing.T) {
 		}
 	}
 }
+
+// The dsh image-gen plugin sends pixels from its own size table, so the gateway has to
+// recover the ratio the model actually lists — gcd reduction gives values nobody has.
+func TestSnapAspect(t *testing.T) {
+	p := &ModelParams{
+		AspectRatios: []string{"", "1:1", "2:3", "3:2", "3:4", "4:3", "16:9", "9:16", "21:9"},
+	}
+	cases := map[string]string{
+		"2048:1365": "3:2",   // 2048x1365 from a plugin size table
+		"1365:2048": "2:3",   // and its portrait twin
+		"2048:1152": "16:9",  // 16:9 at 2K
+		"1024:1024": "1:1",
+		"1024:1536": "2:3",
+		"1536:1024": "3:2",
+		"4096:1715": "21:9",  // 21:9 rounded to whole pixels
+	}
+	for in, want := range cases {
+		got, ok := p.SnapAspect(in)
+		if !ok || got != want {
+			t.Errorf("SnapAspect(%q) = %q/%v, want %q", in, got, ok, want)
+		}
+	}
+	// A genuinely different ratio must not be forced onto something close-ish.
+	if got, ok := p.SnapAspect("5:4"); ok && got == "1:1" {
+		t.Errorf("5:4 snapped to %q, which is too far away", got)
+	}
+	if _, ok := p.SnapAspect("not-a-ratio"); ok {
+		t.Error("garbage must not snap")
+	}
+}
