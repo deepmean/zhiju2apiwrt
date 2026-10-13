@@ -122,6 +122,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-flight: ask the upstream billing module what this turn costs, log it, expose it
+	// on the response headers, and refuse it when a ceiling is configured.
+	if price := s.annotate(r.Context(), w, res.Key, "text", s.cat.IDOf(res.Key)); !s.guard(w, price) {
+		return
+	}
+
 	fast := s.cfg.FastModel
 	if req.FastModel != nil {
 		fast = *req.FastModel

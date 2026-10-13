@@ -29,6 +29,13 @@ type Config struct {
 
 	FastModel        bool // the web UI defaults to fast mode; slow lane answers 10033
 	MaxContextRounds int
+	// Resolution tier handed to the image routes. The upstream bills per tier and every
+	// model advertises its own set (1K / 2K / 4K), so this is the cheap knob.
+	ImageSize string
+	// Cost guard. The estimate is always fetched from the upstream billing module and
+	// logged/annotated; a ceiling above zero additionally refuses requests over it.
+	MaxCostPerRequest int
+	PriceCacheTTL     time.Duration
 
 	ChatMaxConcurrent  int
 	ImageMaxConcurrent int
@@ -141,6 +148,11 @@ func LoadConfig() *Config {
 
 		FastModel:        envBool("FAST_MODEL", true),
 		MaxContextRounds: envInt("MAX_CONTEXT_ROUNDS", 5),
+		ImageSize:        envStr("IMAGE_SIZE", "2K"),
+		// 0 = annotate only (the default): every request logs and reports its estimated
+		// cost, nothing is refused.
+		MaxCostPerRequest: envInt("MAX_COST_PER_REQUEST", 0),
+		PriceCacheTTL:     envDur("PRICE_CACHE_TTL", 10*time.Minute),
 
 		ChatMaxConcurrent:  envInt("CHAT_MAX_CONCURRENT", 4),
 		ImageMaxConcurrent: envInt("IMAGE_MAX_CONCURRENT", 1),

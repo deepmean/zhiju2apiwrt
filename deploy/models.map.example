@@ -1,14 +1,22 @@
 # Optional overrides for the model_key -> numeric model_id mapping used by the image
-# routes. The gateway resolves most ids on its own:
-#   1. /v1/aimoss/repair/home_v2 gives model_group_key -> model_group_id (authoritative)
-#   2. /v1/account/get pairs display names with ids, matched back onto model_keys
-#   3. this file, which always wins
-#
-# Use it when a model the gateway could not place shows up as a 404, or to pin a
-# specific tier (for example a 4K variant of the same model family).
+# routes. The gateway resolves ids on its own from the web client's own config
+# (/v1/aimoss/cfg/list), the account's repair history, the repair home groups, and the
+# account catalog names — so this file is only for pinning a specific tier or fixing a
+# model the automatic resolution got wrong.
 #
 # format: model_key=model_id      (one per line, '#' comments allowed)
-
-# mj2=8                  # Midjourney V7 (the account catalog id)
-# nanobanana2=97         # 香蕉 Pro 2K
-# gptimage2=142          # ChatGPT Image 2 (2K)
+#
+# Values observed in cfg/list (the web client's table), kept here as a reference:
+#   mj2=139                  # 绘画MJ-V7（高稳版）— note: NOT the legacy mj=8
+#   nanobanana2=97           # 香蕉 Pro（2K高清）
+#   nanobananaFlash22k=132   # 香蕉 2（2K高清）
+#   banana31FLite=152        # 香蕉 2-Lite（快速版）
+#   gptimage2=142            # 全灵-Image2(2K)
+#   gptimage25flare2k=172    # GPT-Image2.5创作版（2k高清）
+#   gptimage25sunburst2k=174 # GPT-Image2.5编辑版（2k高清）
+#   seedream452k=101         # 即梦4.5（2K高清）
+#   seedream502k=126         # 即梦5.0（2K高清）
+#   seedream4=148            # 升智-1 —— 会员无限生图，最便宜（change_num=80）
+#
+# The 4K tiers are separate entries: nanobanana4k=98, seedream454k-draw=111, ...
+# A model that resolves to the wrong tier shows up in /health under catalog.resolved.

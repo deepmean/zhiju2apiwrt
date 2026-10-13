@@ -48,6 +48,7 @@ const (
 	kindV1                  // aimoss v1 web routes — 2.2.11
 	kindRepair              // repair routes — 1.1.10
 	kindIOS                 // draw/repair create — plat:iOS
+	kindRepairIOS           // repair routes that only answer the iOS platform — 1.1.10
 )
 
 type Client struct {
@@ -55,6 +56,7 @@ type Client struct {
 	http   *http.Client
 	pool   *Pool
 	chatVer atomic.Value // string, may be discovered at boot
+	prices *priceCache   // upstream-quoted cost per model, for pre-flight annotation
 
 	chatGate  chan struct{}
 	imageGate chan struct{}
@@ -80,6 +82,7 @@ func NewClient(cfg *Config, pool *Pool) *Client {
 		cfg:       cfg,
 		http:      &http.Client{Transport: tr, Timeout: 0},
 		pool:      pool,
+		prices:    newPriceCache(cfg.PriceCacheTTL),
 		chatGate:  make(chan struct{}, maxInt(1, cfg.ChatMaxConcurrent)),
 		imageGate: make(chan struct{}, maxInt(1, cfg.ImageMaxConcurrent)),
 	}
@@ -135,6 +138,12 @@ func (c *Client) headers(kind reqKind, token *Token, accept string) http.Header 
 		h.Set("plat", "iOS")
 		h.Set("x-platform", "iOS")
 		h.Set("ver", c.cfg.AimossVer)
+	case kindRepairIOS:
+		// /v1/aimoss/cfg/list answers "不支持的平台" to plat:web_browser; the web client
+		// itself sends the iOS platform with the repair version.
+		h.Set("plat", "iOS")
+		h.Set("x-platform", "iOS")
+		h.Set("ver", c.cfg.RepairVer)
 	}
 	return h
 }
@@ -251,12 +260,24 @@ func (c *Client) Ping(tok *Token) error {
 	return nil
 }
 
+// CfgList fetches the web client's channel config. It answers only the iOS platform
+// (plat:web_browser gets ret=10002 不支持的平台) and carries two things this gateway
+// needs: channelConfig.wholeApiVersion for the chat route, and the full model table with
+// model_key -> model_id.
+func (c *Client) CfgList(ctx context.Context) (map[string]any, error) {
+	var data map[string]any
+	if err := c.call(ctx, kindRepairIOS, "/v1/aimoss/cfg/list", map[string]any{"check_params": ""}, &data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 // DiscoverVersion reads channelConfig.wholeApiVersion, the value the v2 chat route
 // requires. Without it the route answers `price_unavailable` for every model, which
 // looks like a model problem but is really a header problem.
 func (c *Client) DiscoverVersion(ctx context.Context) string {
-	var data map[string]any
-	if err := c.call(ctx, kindRepair, "/v1/aimoss/cfg/list", map[string]any{"check_params": ""}, &data); err != nil {
+	data, err := c.CfgList(ctx)
+	if err != nil {
 		logf("WARN", "version discovery failed, keeping %s: %v", c.version(), err)
 		return ""
 	}

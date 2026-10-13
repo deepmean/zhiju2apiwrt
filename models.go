@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"os"
 	"regexp"
 	"sort"
@@ -14,13 +15,14 @@ import (
 
 // Model is one entry of the upstream catalog (/v1/models/snapshot/all).
 type Model struct {
-	Key       string         `json:"model_key"`
-	Name      string         `json:"model_name"`
-	Type      string         `json:"model_type"` // text | draw | repair | video | music | voice | tool
-	Desc      string         `json:"model_desc"`
-	DrawUI    string         `json:"draw_ui_type"`
-	IsDefault bool           `json:"is_default"`
-	Caps      map[string]any `json:"capacities"`
+	Key         string         `json:"model_key"`
+	Name        string         `json:"model_name"`
+	Type        string         `json:"model_type"` // text | draw | repair | video | music | voice | tool
+	Desc        string         `json:"model_desc"`
+	DrawUI      string         `json:"draw_ui_type"`
+	IsDefault   bool           `json:"is_default"`
+	IsUnlimited bool           `json:"is_unlimited"`
+	Caps        map[string]any `json:"capacities"`
 }
 
 type modelSnapshot struct {
@@ -29,10 +31,13 @@ type modelSnapshot struct {
 
 // Resolved tells the handlers how to drive one OpenAI-facing model name.
 type Resolved struct {
-	OpenAI string // the name the client asked for
-	Kind   string // chat | mj | repair
-	Key    string // upstream model_key
-	ID     int    // numeric model_id the image routes require
+	OpenAI     string // the name the client asked for, e.g. gptimage2-image
+	Kind       string // chat | mj | repair
+	Key        string // upstream model_key, e.g. gptimage2
+	ID         int    // numeric model_id the image routes require
+	Name       string // upstream display name, e.g. 升智-2
+	Family     string // upstream model_type: text | draw | repair
+	Capability string // chat | image | image-edit (what the -suffix selects)
 }
 
 // Catalog caches the upstream model list plus the model_key -> numeric id map.
@@ -105,7 +110,34 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 	}
 
 	ids := map[string]int{}
-	// 1) authoritative for the repair family: the repair home groups carry their id.
+	// 1) The web client's own config carries the full model table (model_key + model_id)
+	// for every family, which is the freshest and most complete source there is.
+	if cfgMap, err := cat.c.CfgList(ctx); err == nil {
+		collectModelIDs(cfgMap, ids)
+	} else {
+		logf("WARN", "cfg/list unavailable for model ids: %v", err)
+	}
+
+	// 2) The account's own repair history records the group key and id each past task
+	// actually ran with; it fills gaps cfg/list does not know about yet.
+	var history struct {
+		Items []struct {
+			ModelGroupKey string `json:"model_group_key"`
+			ModelGroupID  int    `json:"model_group_id"`
+		} `json:"items"`
+	}
+	if err := cat.c.call(ctx, kindRepair, "/v1/aimoss/repair/history",
+		map[string]any{"keyword": "", "limit": 1000, "cursor": "0"}, &history); err == nil {
+		for _, it := range history.Items {
+			if it.ModelGroupKey != "" && it.ModelGroupID > 0 {
+				if _, seen := ids[it.ModelGroupKey]; !seen {
+					ids[it.ModelGroupKey] = it.ModelGroupID
+				}
+			}
+		}
+	}
+
+	// 3) The repair home groups carry ids for the models it showcases.
 	var home struct {
 		Items []struct {
 			ModelGroupKey string `json:"model_group_key"`
@@ -175,15 +207,28 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 func buildIndex(text, draw, repair []Model, ids map[string]int) map[string]Resolved {
 	idx := map[string]Resolved{}
 	for _, m := range text {
-		idx[m.Key] = Resolved{OpenAI: m.Key, Kind: "chat", Key: m.Key}
+		idx[m.Key] = Resolved{
+			OpenAI: m.Key, Kind: "chat", Key: m.Key,
+			Name: m.Name, Family: m.Type, Capability: "chat",
+		}
 	}
 	addImage := func(m Model, kind string) {
 		id, ok := ids[m.Key]
 		if !ok || id <= 0 {
 			return
 		}
-		idx[m.Key+"-image"] = Resolved{OpenAI: m.Key + "-image", Kind: kind, Key: m.Key, ID: id}
-		idx[m.Key+"-image-edit"] = Resolved{OpenAI: m.Key + "-image-edit", Kind: kind, Key: m.Key, ID: id}
+		family := m.Type
+		if family == "" {
+			family = "repair"
+		}
+		idx[m.Key+"-image"] = Resolved{
+			OpenAI: m.Key + "-image", Kind: kind, Key: m.Key, ID: id,
+			Name: m.Name, Family: family, Capability: "image",
+		}
+		idx[m.Key+"-image-edit"] = Resolved{
+			OpenAI: m.Key + "-image-edit", Kind: kind, Key: m.Key, ID: id,
+			Name: m.Name, Family: family, Capability: "image-edit",
+		}
 	}
 	for _, m := range draw {
 		addImage(m, "mj")
@@ -195,6 +240,42 @@ func buildIndex(text, draw, repair []Model, ids map[string]int) map[string]Resol
 }
 
 var nonAlnum = regexp.MustCompile(`[^\p{L}\p{N}]+`)
+
+// collectModelIDs walks an arbitrary config document and records every
+// {model_key, model_id} pair it finds — the cfg/list payload nests them a few levels deep
+// and the shape is not documented, so a generic walk beats a brittle struct.
+func collectModelIDs(v any, out map[string]int) {
+	switch t := v.(type) {
+	case map[string]any:
+		if id, ok := toInt(t["model_id"]); ok && id > 0 {
+			if key, ok := t["model_key"].(string); ok && key != "" {
+				if _, seen := out[key]; !seen {
+					out[key] = id
+				}
+			}
+		}
+		for _, sub := range t {
+			collectModelIDs(sub, out)
+		}
+	case []any:
+		for _, sub := range t {
+			collectModelIDs(sub, out)
+		}
+	}
+}
+
+func toInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
+	}
+	return 0, false
+}
 
 func normName(s string) string {
 	return strings.ToLower(nonAlnum.ReplaceAllString(s, ""))
@@ -251,7 +332,9 @@ func (cat *Catalog) Resolve(name string) (Resolved, bool) {
 	return Resolved{}, false
 }
 
-// OpenAIList is the /v1/models payload.
+// OpenAIList is the /v1/models payload. Besides the required fields it carries the real
+// upstream model name and the numeric id, so a caller can see that `gptimage2-image` is
+// 升智-2 without having to consult anything else.
 func (cat *Catalog) OpenAIList() []map[string]any {
 	cat.mu.RLock()
 	defer cat.mu.RUnlock()
@@ -265,20 +348,122 @@ func (cat *Catalog) OpenAIList() []map[string]any {
 	out := make([]map[string]any, 0, len(keys))
 	now := time.Now().Unix()
 	for _, k := range keys {
-		out = append(out, map[string]any{
+		r := cat.byName[k]
+		entry := map[string]any{
 			"id":       k,
 			"object":   "model",
 			"created":  now,
 			"owned_by": "zhijuai",
-		})
+		}
+		if r.Name != "" {
+			entry["name"] = r.Name
+		}
+		if r.Key != "" {
+			entry["upstream_key"] = r.Key
+		}
+		if r.ID > 0 {
+			entry["upstream_id"] = r.ID
+		}
+		if r.Family != "" {
+			entry["family"] = r.Family
+		}
+		if r.Capability != "" {
+			entry["capability"] = r.Capability
+		}
+		entry["unlimited"] = cat.isUnlimitedLocked(r.Key)
+		out = append(out, entry)
 	}
 	return out
+}
+
+// IndexEntry is one OpenAI-facing model name with everything needed to display it:
+// the real upstream name, the numeric id, and what the id selects.
+type IndexEntry struct {
+	OpenAI     string
+	Key        string
+	Name       string
+	Family     string
+	Capability string
+	ID         int
+	Unlimited  bool
+}
+
+// Index returns every OpenAI-facing name, sorted, with its upstream identity.
+func (cat *Catalog) Index() []IndexEntry {
+	cat.mu.RLock()
+	defer cat.mu.RUnlock()
+
+	out := make([]IndexEntry, 0, len(cat.byName))
+	for openai, r := range cat.byName {
+		out = append(out, IndexEntry{
+			OpenAI:     openai,
+			Key:        r.Key,
+			Name:       r.Name,
+			Family:     r.Family,
+			Capability: r.Capability,
+			ID:         r.ID,
+			Unlimited:  cat.isUnlimitedLocked(r.Key),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].OpenAI < out[j].OpenAI })
+	return out
+}
+
+// isUnlimitedLocked reports the catalog's `is_unlimited` flag. Callers must hold the
+// read lock.
+func (cat *Catalog) isUnlimitedLocked(key string) bool {
+	for _, group := range [][]Model{cat.text, cat.draw, cat.repair} {
+		for _, m := range group {
+			if m.Key == key {
+				return m.IsUnlimited
+			}
+		}
+	}
+	return false
 }
 
 func (cat *Catalog) TextModels() []Model {
 	cat.mu.RLock()
 	defer cat.mu.RUnlock()
 	return append([]Model(nil), cat.text...)
+}
+
+// ImageModels lists the image-capable models (both families) that resolved to an id.
+func (cat *Catalog) ImageModels() []Model {
+	cat.mu.RLock()
+	defer cat.mu.RUnlock()
+	var out []Model
+	for _, group := range [][]Model{cat.draw, cat.repair} {
+		for _, m := range group {
+			if cat.idByKey[m.Key] > 0 {
+				out = append(out, m)
+			}
+		}
+	}
+	return out
+}
+
+// ModelsByContentType maps the upstream content_type ("text" / "draw") onto models.
+func (cat *Catalog) ModelsByContentType(contentType string) []Model {
+	if contentType == "text" {
+		return cat.TextModels()
+	}
+	return cat.ImageModels()
+}
+
+// IDOf returns the numeric model id for a key, or 0 when it is not known.
+func (cat *Catalog) IDOf(key string) int {
+	cat.mu.RLock()
+	defer cat.mu.RUnlock()
+	return cat.idByKey[key]
+}
+
+// IsUnlimited reports the catalog's `is_unlimited` flag: those models do not consume
+// credits on this plan (升智-1 is one).
+func (cat *Catalog) IsUnlimited(key string) bool {
+	cat.mu.RLock()
+	defer cat.mu.RUnlock()
+	return cat.isUnlimitedLocked(key)
 }
 
 func (cat *Catalog) Status() map[string]any {

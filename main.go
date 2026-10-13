@@ -114,15 +114,23 @@ func main() {
 	}
 	cancel()
 
+	// Fill the price cache in the background so the first /v1/models call is fast.
+	go func() {
+		warmCtx, warmCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer warmCancel()
+		srv.warmPrices(warmCtx)
+	}()
+
 	stop := make(chan struct{})
 	go pool.StartMaintenance(client, stop)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", srv.auth(srv.handleModels))
+	mux.HandleFunc("/v1/models/prices", srv.auth(srv.handleModelPrices))
+	mux.HandleFunc("/v1/models/refresh", srv.auth(srv.handleRefresh))
 	mux.HandleFunc("/v1/chat/completions", srv.auth(srv.handleChat))
 	mux.HandleFunc("/v1/images/generations", srv.auth(srv.handleImageGenerations))
 	mux.HandleFunc("/v1/images/edits", srv.auth(srv.handleImageEdits))
-	mux.HandleFunc("/v1/models/refresh", srv.auth(srv.handleRefresh))
 	mux.HandleFunc("/health", srv.handleHealth)
 	mux.HandleFunc("/admin/tokens", srv.auth(srv.handleAdminTokens))
 
@@ -184,11 +192,14 @@ func bearer(r *http.Request) string {
 // ---- endpoints ---------------------------------------------------------------------
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	if err := s.cat.Refresh(r.Context(), false); err != nil && len(s.cat.OpenAIList()) == 0 {
+	if err := s.cat.Refresh(r.Context(), false); err != nil && len(s.cat.Index()) == 0 {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "cannot load the model catalog: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": s.cat.OpenAIList()})
+	// Prices are included by default (they are cached, and the real name alone does not
+	// tell you what a model costs). ?prices=0 skips the upstream lookups entirely.
+	withPrices := r.URL.Query().Get("prices") != "0"
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": s.modelList(r.Context(), withPrices)})
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {

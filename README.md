@@ -13,6 +13,7 @@
 | 接口 | 说明 |
 | --- | --- |
 | `GET /v1/models` | 实时拉取上游目录，文本模型出裸名，图片模型出 `-image` / `-image-edit` 变体 |
+| `GET /v1/models/prices` | **生成前**的服务端报价表：每个模型的标价 + 本账号实付 + 是否无限 |
 | `POST /v1/chat/completions` | `stream: true/false` 都支持；思考内容进 `reasoning_content` |
 | `POST /v1/images/generations` | OpenAI 生图接口，返回 `data[].url`（或 `b64_json`） |
 | `POST /v1/images/edits` | OpenAI multipart 改图接口（`image` + `prompt`） |
