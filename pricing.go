@@ -233,6 +233,19 @@ func (s *Server) modelList(ctx context.Context, withPrices bool) []map[string]an
 				entry["quota_remain"] = n
 			}
 		}
+		// Image models advertise what they accept, straight from the upstream table, so a
+		// client can pick a valid ratio/resolution instead of guessing one.
+		if e.Capability != "chat" && e.Key != "" {
+			if p, ok := s.c.ParamsOf(ctx, e.Key); ok && p != nil {
+				entry["aspect_ratios"] = p.AspectRatios
+				entry["default_aspect_ratio"] = p.DefaultAspect
+				entry["image_sizes"] = p.ImageSizes
+				entry["default_image_size"] = p.DefaultSize
+				if p.PromptLimit > 0 {
+					entry["prompt_limit"] = p.PromptLimit
+				}
+			}
+		}
 		out = append(out, entry)
 	}
 	return out
@@ -253,6 +266,19 @@ func (s *Server) warmPrices(ctx context.Context) {
 		_, _ = s.c.PriceOf(ctx, m.Key, "draw", s.cat.IDOf(m.Key), "draw")
 	}
 	logf("INFO", "price cache warmed")
+}
+
+// handleModelParams serves the raw per-model parameter table: the aspect ratios and
+// resolution tiers each model accepts, its defaults, its prompt limit, and (for
+// Midjourney) the extra knobs with their ranges.
+//
+//	GET /v1/models/params
+func (s *Server) handleModelParams(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"object": "list",
+		"note":   "values are declared per model upstream; image_size is usually a single fixed tier, so send it only if the model lists it",
+		"data":   s.c.ParamsTable(r.Context()),
+	})
 }
 
 // handleModelPrices serves the annotated table: every model with its list price, this

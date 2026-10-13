@@ -30,9 +30,13 @@ DISCOVER_VERSION=true
 # ret=10033 "您有任务正在执行" whenever it is busy.
 FAST_MODEL=true
 MAX_CONTEXT_ROUNDS=5
-# Resolution tier for image requests (1K / 2K / 4K, model dependent). The upstream bills
-# per tier, so 1K is the cheap setting; a client can override per request with the
-# non-standard "image_size" field.
+# Resolution tier preference for image requests. This is a PREFERENCE, not a switch:
+# every model declares its own tiers upstream and most declare exactly one (香蕉 Pro is
+# 2K only, 升智-2.5创作版 is 2K only; only 升智-1 offers 1K and 2K). The value is used
+# only when the model lists it, otherwise the model's own default wins, and an explicit
+# per-request image_size is validated against the model's list.
+#
+# GET /v1/models/params prints the whole table; GET /v1/models carries it per model.
 IMAGE_SIZE=2K
 
 # --- cost guard (server-quoted, not guessed) ----------------------------------------
@@ -46,6 +50,8 @@ IMAGE_SIZE=2K
 # (on this account 升智-1 / seedream4 is change_num=80 and unlimited).
 MAX_COST_PER_REQUEST=0
 PRICE_CACHE_TTL=10m
+# The per-model parameter table (ratios, tiers, prompt limits) changes rarely.
+PARAMS_CACHE_TTL=30m
 
 # --- resource limits (the router is the constraint) ---------------------------------
 # Every request goes through one shared upstream account, so keep the image gate at 1:

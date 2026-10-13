@@ -20,10 +20,76 @@ type imageRequest struct {
 	N              int    `json:"n,omitempty"`
 	Size           string `json:"size,omitempty"`
 	ResponseFormat string `json:"response_format,omitempty"`
-	// Non-standard extras this gateway understands: an explicit upstream resolution
-	// tier (1K/2K/4K) and an input picture as a URL or data URI.
-	ImageSize string `json:"image_size,omitempty"`
-	Image     string `json:"image,omitempty"`
+	// Non-standard extras this gateway understands:
+	//   aspect_ratio  an explicit upstream ratio ("4:3"), overriding whatever `size` implies
+	//   image_size    an explicit resolution tier ("1K"/"2K"/"4K"), validated per model
+	//   mj_params     Midjourney knobs, passed through (stylize, chaos, quality, seed, ...)
+	//   image         an input picture as a URL or data URI
+	AspectRatio string         `json:"aspect_ratio,omitempty"`
+	ImageSize   string         `json:"image_size,omitempty"`
+	MJParams    map[string]any `json:"mj_params,omitempty"`
+	Image       string         `json:"image,omitempty"`
+}
+
+// genOptions is a validated, model-aware image request.
+type genOptions struct {
+	Prompt    string
+	Aspect    string
+	Size      string
+	InputURLs []string
+	MJParams  map[string]any
+}
+
+// prepareImageOptions validates the requested ratio and resolution against the model's
+// own parameter table and fills in its defaults.
+//
+// Validation is not pedantry here: the values are per model, most models offer exactly
+// one resolution tier, and the upstream ignores an unsupported value silently — so a
+// caller asking for 1K on a 2K-only model would otherwise get 2K and never know.
+func (s *Server) prepareImageOptions(ctx context.Context, w http.ResponseWriter, res Resolved, req imageRequest) (*genOptions, bool) {
+	p, _ := s.c.ParamsOf(ctx, res.Key)
+	opts := &genOptions{Prompt: req.Prompt, MJParams: req.MJParams}
+
+	aspect := strings.TrimSpace(req.AspectRatio)
+	if aspect == "" {
+		aspect = ratioFromSize(req.Size)
+	}
+	if p != nil {
+		if aspect != "" && !p.AllowsAspect(aspect) {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
+				"model %s does not accept aspect_ratio %q; supported: %s",
+				res.Key, aspect, strings.Join(append(append([]string{}, p.AspectRatios...), `"" (auto)`), ", ")))
+			return nil, false
+		}
+		if aspect == "" {
+			aspect = p.DefaultAspect
+		}
+	}
+	opts.Aspect = aspect
+
+	size := strings.TrimSpace(req.ImageSize)
+	if size == "" && s.cfg.ImageSize != "" && (p == nil || p.AllowsSize(s.cfg.ImageSize)) {
+		size = s.cfg.ImageSize
+	}
+	if p != nil {
+		if size != "" && !p.AllowsSize(size) {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
+				"model %s does not accept image_size %q; supported: %s (default %s)",
+				res.Key, size, strings.Join(p.ImageSizes, ", "), p.DefaultSize))
+			return nil, false
+		}
+		if size == "" {
+			size = p.DefaultSize
+		}
+	}
+	opts.Size = size
+
+	if p != nil && p.PromptLimit > 0 && len([]rune(req.Prompt)) > p.PromptLimit {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf(
+			"prompt is %d characters; model %s allows %d", len([]rune(req.Prompt)), res.Key, p.PromptLimit))
+		return nil, false
+	}
+	return opts, true
 }
 
 type imageResponse struct {
@@ -53,21 +119,21 @@ type drawPage struct {
 		Waiting       bool   `json:"waiting"`
 		Status        int    `json:"status"`
 		Content       struct {
-			Text  string   `json:"text"`
-			URLs  []string `json:"urls"`
-			Error string   `json:"error"`
+			Text  string     `json:"text"`
+			URLs  []ImageURL `json:"urls"`
+			Error string     `json:"error"`
 		} `json:"content"`
 	} `json:"items"`
 }
 
 type repairMessage struct {
-	MsgID       string   `json:"msg_id"`
-	RefID       string   `json:"ref_id"`
-	FUID        string   `json:"fuid"`
-	Content     string   `json:"content"`
-	Status      string   `json:"status"`
-	ContentType string   `json:"content_type"`
-	URLs        []string `json:"urls"`
+	MsgID       string     `json:"msg_id"`
+	RefID       string     `json:"ref_id"`
+	FUID        string     `json:"fuid"`
+	Content     string     `json:"content"`
+	Status      string     `json:"status"`
+	ContentType string     `json:"content_type"`
+	URLs        []ImageURL `json:"urls"`
 	DrawContent struct {
 		URL      string `json:"url"`
 		ThumbURL string `json:"thumb_url"`
@@ -96,7 +162,7 @@ func pickRepairURLs(page repairPage) []string {
 					continue
 				}
 				if m.RefID != "" && len(m.URLs) > 0 {
-					fallback = append(fallback, m.URLs...)
+					fallback = append(fallback, urlsOf(m.URLs)...)
 				}
 			}
 		}
@@ -131,7 +197,7 @@ func pickDrawURLs(page drawPage) []string {
 		if it.IsUserMessage {
 			continue
 		}
-		out = append(out, it.Content.URLs...)
+		out = append(out, urlsOf(it.Content.URLs)...)
 	}
 	return out
 }
@@ -163,6 +229,12 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Validate the ratio/resolution against the model's own table before spending anything.
+	opts, ok := s.prepareImageOptions(r.Context(), w, res, req)
+	if !ok {
+		return
+	}
+
 	if !s.acquire(r.Context(), s.c.imageGate) {
 		writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error", "too many concurrent image requests")
 		return
@@ -172,7 +244,7 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.ImageTimeout)
 	defer cancel()
 
-	urls, err := s.generate(ctx, res, req.Prompt, ratioFromSize(req.Size), imageSize(req, s.cfg.ImageSize), nil)
+	urls, err := s.generate(ctx, res, opts)
 	if err != nil {
 		s.writeUpstreamErr(w, err)
 		return
@@ -180,30 +252,31 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	s.writeImages(w, req, urls)
 }
 
-// imageSize picks the resolution tier: the request wins, then the configured default.
-func imageSize(req imageRequest, def string) string {
-	if v := strings.TrimSpace(req.ImageSize); v != "" {
-		return v
-	}
-	return def
-}
-
 // generate starts one image task and polls it to completion.
-func (s *Server) generate(ctx context.Context, res Resolved, prompt, ratio, size string, inputURLs []string) ([]string, error) {
+func (s *Server) generate(ctx context.Context, res Resolved, opts *genOptions) ([]string, error) {
 	if res.Kind == "mj" {
-		return s.generateMJ(ctx, res, prompt, ratio)
+		return s.generateMJ(ctx, res, opts)
 	}
-	return s.generateRepair(ctx, res, prompt, ratio, size, inputURLs)
+	return s.generateRepair(ctx, res, opts)
 }
 
-func (s *Server) generateMJ(ctx context.Context, res Resolved, prompt, ratio string) ([]string, error) {
+func (s *Server) generateMJ(ctx context.Context, res Resolved, opts *genOptions) ([]string, error) {
+	// The draw page sends the ratio as check_params_v2[{param_key:"aspect"}]; verified
+	// against a real 4:3 request that came back 1024x772.
 	params := []map[string]string{}
-	if ratio != "" {
-		params = append(params, map[string]string{"param_key": "aspect", "param_value": ratio})
+	if opts.Aspect != "" {
+		params = append(params, map[string]string{"param_key": "aspect", "param_value": opts.Aspect})
+	}
+	// Extra Midjourney knobs (stylize, chaos, quality, seed, no, tile, ...) pass through.
+	for k, v := range opts.MJParams {
+		if k == "" {
+			continue
+		}
+		params = append(params, map[string]string{"param_key": k, "param_value": fmt.Sprint(v)})
 	}
 	body := map[string]any{
 		"session_id":       "",
-		"input_text":       prompt,
+		"input_text":       opts.Prompt,
 		"check_params":     nil,
 		"model_id":         res.ID,
 		"draw_type":        "TextToImg",
@@ -238,23 +311,21 @@ func (s *Server) generateMJ(ctx context.Context, res Resolved, prompt, ratio str
 	return nil, fmt.Errorf("midjourney task did not finish within %s", s.cfg.ImageTimeout)
 }
 
-func (s *Server) generateRepair(ctx context.Context, res Resolved, prompt, ratio, size string, inputURLs []string) ([]string, error) {
+func (s *Server) generateRepair(ctx context.Context, res Resolved, opts *genOptions) ([]string, error) {
+	inputURLs := opts.InputURLs
 	if inputURLs == nil {
 		inputURLs = []string{}
-	}
-	if size == "" {
-		size = "2K"
 	}
 	body := map[string]any{
 		"fast_model":   s.cfg.FastModel,
 		"urls":         inputURLs,
-		"prompt":       prompt,
+		"prompt":       opts.Prompt,
 		"model_id":     res.ID,
 		"model_code":   res.Key,
 		"session_id":   "",
 		"tag":          "",
-		"aspect_ratio": ratio,
-		"image_size":   size,
+		"aspect_ratio": opts.Aspect,
+		"image_size":   opts.Size,
 	}
 	var created repairCreateResp
 	err := s.c.call(ctx, kindIOS, "/v1/aimoss/repair/async/create", body, &created)
@@ -378,6 +449,19 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Same validation as generation, with the ratio taken from the form.
+	editReq := imageRequest{
+		Model:       model,
+		Prompt:      prompt,
+		Size:        size,
+		ImageSize:   r.FormValue("image_size"),
+		AspectRatio: r.FormValue("aspect_ratio"),
+	}
+	opts, ok := s.prepareImageOptions(r.Context(), w, res, editReq)
+	if !ok {
+		return
+	}
+
 	file, header, err := r.FormFile("image")
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "image file is required")
@@ -405,8 +489,9 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logf("INFO", "input image uploaded: %s", objectURL)
+	opts.InputURLs = []string{objectURL}
 
-	urls, err := s.generate(ctx, res, prompt, ratioFromSize(size), responseFormatOr(r.FormValue("image_size"), s.cfg.ImageSize), []string{objectURL})
+	urls, err := s.generate(ctx, res, opts)
 	if err != nil {
 		s.writeUpstreamErr(w, err)
 		return

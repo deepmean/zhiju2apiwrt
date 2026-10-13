@@ -127,6 +127,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", srv.auth(srv.handleModels))
 	mux.HandleFunc("/v1/models/prices", srv.auth(srv.handleModelPrices))
+	mux.HandleFunc("/v1/models/params", srv.auth(srv.handleModelParams))
 	mux.HandleFunc("/v1/models/refresh", srv.auth(srv.handleRefresh))
 	mux.HandleFunc("/v1/chat/completions", srv.auth(srv.handleChat))
 	mux.HandleFunc("/v1/images/generations", srv.auth(srv.handleImageGenerations))

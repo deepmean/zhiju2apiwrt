@@ -14,6 +14,7 @@
 | --- | --- |
 | `GET /v1/models` | 实时拉取上游目录，文本模型出裸名，图片模型出 `-image` / `-image-edit` 变体 |
 | `GET /v1/models/prices` | **生成前**的服务端报价表：每个模型的标价 + 本账号实付 + 是否无限 |
+| `GET /v1/models/params` | 每个模型支持的比例 / 分辨率 / 提示词上限（含 MJ 的 stylize 等旋钮范围） |
 | `POST /v1/chat/completions` | `stream: true/false` 都支持；思考内容进 `reasoning_content` |
 | `POST /v1/images/generations` | OpenAI 生图接口，返回 `data[].url`（或 `b64_json`） |
 | `POST /v1/images/edits` | OpenAI multipart 改图接口（`image` + `prompt`） |
@@ -339,6 +340,40 @@ curl http://192.168.26.1:8080/v1/images/edits \
 
 
 ---
+
+### 比例与分辨率（每个模型不一样，别猜）
+
+支持的值由上游声明，网关照抄并**校验**：
+
+- `/v1/models` 里每个图片模型都带 `aspect_ratios` / `default_aspect_ratio` / `image_sizes` / `default_image_size` / `prompt_limit`；
+- `GET /v1/models/params` 是完整表（MJ 的 `stylize`/`chaos`/`quality`/`seed`/`no`/`tile`/`iw` 等旋钮连取值范围一起给）；
+- 请求里可以显式传 `aspect_ratio` 与 `image_size`；不传就用模型默认值；**传了模型不支持的值会 400 并把可选值列出来**，而不是被上游静默忽略。
+
+关键事实（实测）：**`image_size` 基本不是"可选档位"**，而是模型固有属性 ——
+
+| 模型 | 比例 | 分辨率 |
+|---|---|---|
+| 升智-1 `seedream4` | `""`(自动) `2:3` `3:2` `3:4` `4:3` `4:5` `5:4` `1:1` `9:16` `16:9` `21:9` | **`1K` `2K`**（唯一双档） |
+| 香蕉 Pro `nanobanana2` | 同上 | 只有 `2K` |
+| 香蕉 2 `nanobananaFlash22k` | 另含 `1:4` `4:1` `1:8` `8:1` | 只有 `2K` |
+| 升智-2 `gptimage2` | 默认 `auto` | 只有 `2K` |
+| 升智-2.5创作/编辑版 | 默认 `auto` | 只有 `2K`（4K 是另一个模型 id） |
+| Midjourney V7 `mj2` | 只有 `4:3` `1:1` `3:4` | 无档位概念 |
+
+所以 `IMAGE_SIZE` 配置项是**偏好**不是开关：模型支持才用，否则用模型自己的默认值。
+
+```sh
+# 看某个模型支持什么
+curl -s http://192.168.26.1:8080/v1/models/params -H 'Authorization: Bearer sk-...' | jq '.data[] | select(.model_key=="seedream4")'
+
+# 按比例生图（MJ 的比例参数键是 aspect，实测 4:3 出图 1024x772）
+curl http://192.168.26.1:8080/v1/images/generations \
+  -H 'Authorization: Bearer sk-...' -H 'Content-Type: application/json' \
+  -d '{"model":"seedream4-image","prompt":"一只柯基犬","aspect_ratio":"16:9","image_size":"1K"}'
+
+# MJ 的额外旋钮
+-d '{"model":"mj2-image","prompt":"a red apple","aspect_ratio":"4:3","mj_params":{"stylize":250,"chaos":10,"seed":42}}'
+```
 
 ## 8. 配置项
 

@@ -72,17 +72,39 @@ func TestTerminalRepairState(t *testing.T) {
 }
 
 func TestPickDrawURLsSkipsUserTurn(t *testing.T) {
+	// Midjourney's urls are objects with dimensions; the repair family uses plain
+	// strings. Both must decode, and the user's own turn must be skipped.
 	const page = `{"items":[
       {"message_id":"u1","is_user_message":true,"waiting":false,"status":1,"content":{"urls":["https://cdn.example/ECHO.png"]}},
-      {"message_id":"a1","is_user_message":false,"waiting":false,"status":1,"content":{"urls":["https://cdn.example/MJ.png","https://cdn.example/MJ2.png"]}}
+      {"message_id":"a1","is_user_message":false,"waiting":false,"status":3,
+       "content":{"urls":[{"url":"https://cdn.example/MJ.png","thumb_url":"https://cdn.example/MJ.thumb.png","width":1024,"height":772},
+                          "https://cdn.example/MJ2.png"]}}
     ]}`
 	var p drawPage
 	if err := json.Unmarshal([]byte(page), &p); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	got := pickDrawURLs(p)
-	if len(got) != 2 || got[0] != "https://cdn.example/MJ.png" {
+	if len(got) != 2 || got[0] != "https://cdn.example/MJ.png" || got[1] != "https://cdn.example/MJ2.png" {
 		t.Fatalf("want the two assistant urls, got %v", got)
+	}
+}
+
+// The object shape carries dimensions; decoding must not lose them, because the poll
+// loop relies on the whole page decoding successfully.
+func TestImageURLShapes(t *testing.T) {
+	var list []ImageURL
+	if err := json.Unmarshal([]byte(`["https://a/1.png",{"url":"https://a/2.png","width":1024,"height":772}]`), &list); err != nil {
+		t.Fatalf("unmarshal mixed shapes: %v", err)
+	}
+	if len(list) != 2 || list[0].URL != "https://a/1.png" {
+		t.Fatalf("string form lost: %+v", list)
+	}
+	if list[1].Width != 1024 || list[1].Height != 772 {
+		t.Fatalf("object form lost its dimensions: %+v", list[1])
+	}
+	if got := urlsOf(list); len(got) != 2 {
+		t.Fatalf("urlsOf = %v", got)
 	}
 }
 

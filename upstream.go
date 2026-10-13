@@ -57,6 +57,7 @@ type Client struct {
 	pool   *Pool
 	chatVer atomic.Value // string, may be discovered at boot
 	prices *priceCache   // upstream-quoted cost per model, for pre-flight annotation
+	params *paramsCache  // per-model aspect ratios / resolution tiers / prompt limits
 
 	chatGate  chan struct{}
 	imageGate chan struct{}
@@ -83,6 +84,7 @@ func NewClient(cfg *Config, pool *Pool) *Client {
 		http:      &http.Client{Transport: tr, Timeout: 0},
 		pool:      pool,
 		prices:    newPriceCache(cfg.PriceCacheTTL),
+		params:    &paramsCache{m: map[string]*ModelParams{}, ttl: cfg.ParamsCacheTTL},
 		chatGate:  make(chan struct{}, maxInt(1, cfg.ChatMaxConcurrent)),
 		imageGate: make(chan struct{}, maxInt(1, cfg.ImageMaxConcurrent)),
 	}
