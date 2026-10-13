@@ -45,15 +45,16 @@ type Catalog struct {
 	cfg *Config
 	c   *Client
 
-	mu       sync.RWMutex
-	text     []Model
-	draw     []Model
-	repair   []Model
-	idByKey  map[string]int
-	byName   map[string]Resolved // OpenAI-facing name -> resolution
-	fetched  time.Time
-	lastErr  string
-	overrides map[string]int
+	mu          sync.RWMutex
+	text        []Model
+	draw        []Model
+	repair      []Model
+	idByKey     map[string]int
+	remainByKey map[string]int // model_key -> remaining quota (-1 = unlimited, 0 = none left)
+	byName      map[string]Resolved
+	fetched     time.Time
+	lastErr     string
+	overrides   map[string]int
 }
 
 func NewCatalog(cfg *Config, c *Client) *Catalog {
@@ -154,33 +155,41 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 		}
 	}
 
-	// 2) the account catalog pairs display names with ids; match those names back to keys.
+	// 4) The account catalog pairs display names with ids, and carries the per-model
+	// remaining quota — the only price-like signal some models have at all: Midjourney
+	// is remain_count=-1, i.e. billed by task count rather than 灵力.
 	var acct struct {
 		Subscriptions struct {
 			ModelsRemain []struct {
-				ModelName string `json:"model_name"`
-				ModelID   int    `json:"model_id"`
+				ModelName   string `json:"model_name"`
+				ModelID     int    `json:"model_id"`
+				RemainCount int    `json:"remain_count"`
 			} `json:"models_remain"`
 		} `json:"subscriptions"`
 	}
+	remain := map[string]int{}
 	if err := cat.c.call(ctx, kindV1, "/v1/account/get", map[string]any{}, &acct); err == nil {
 		nameToID := map[string]int{}
+		remainByID := map[int]int{}
 		for _, m := range acct.Subscriptions.ModelsRemain {
 			nameToID[normName(m.ModelName)] = m.ModelID
+			remainByID[m.ModelID] = m.RemainCount
 		}
 		for _, group := range [][]Model{snap.Models["draw"], snap.Models["repair"]} {
-			for _, m := range group {
-				if _, ok := ids[m.Key]; ok {
-					continue
-				}
+			if _, ok := ids[m.Key]; !ok {
 				if id := matchName(nameToID, m.Name); id > 0 {
 					ids[m.Key] = id
 				}
 			}
 		}
+		for key, id := range ids {
+			if n, ok := remainByID[id]; ok {
+				remain[key] = n
+			}
+		}
 	}
 
-	// 3) explicit overrides win.
+	// 5) explicit overrides win.
 	for k, v := range cat.overrides {
 		ids[k] = v
 	}
@@ -190,13 +199,14 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 	cat.draw = snap.Models["draw"]
 	cat.repair = snap.Models["repair"]
 	cat.idByKey = ids
+	cat.remainByKey = remain
 	cat.byName = buildIndex(snap.Models["text"], snap.Models["draw"], snap.Models["repair"], ids)
 	cat.fetched = time.Now()
 	cat.lastErr = ""
 	cat.mu.Unlock()
 
-	logf("INFO", "catalog: %d text, %d draw, %d repair, %d ids resolved",
-		len(snap.Models["text"]), len(snap.Models["draw"]), len(snap.Models["repair"]), len(ids))
+	logf("INFO", "catalog: %d text, %d draw, %d repair, %d ids resolved, %d quotas",
+		len(snap.Models["text"]), len(snap.Models["draw"]), len(snap.Models["repair"]), len(ids), len(remain))
 	return nil
 }
 
@@ -456,6 +466,16 @@ func (cat *Catalog) IDOf(key string) int {
 	cat.mu.RLock()
 	defer cat.mu.RUnlock()
 	return cat.idByKey[key]
+}
+
+// RemainOf reports the account's remaining quota for a model. -1 means unlimited (the
+// upstream bills those by task count, and has no 灵力 price row for them at all — which
+// is why Midjourney's price lookup answers with a generic error).
+func (cat *Catalog) RemainOf(key string) (int, bool) {
+	cat.mu.RLock()
+	defer cat.mu.RUnlock()
+	n, ok := cat.remainByKey[key]
+	return n, ok
 }
 
 // IsUnlimited reports the catalog's `is_unlimited` flag: those models do not consume

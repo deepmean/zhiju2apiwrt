@@ -30,9 +30,10 @@ type Price struct {
 	Original  int  `json:"original_change_num,omitempty"`
 	IsVIP     bool `json:"is_vip"`
 
-	Unlimited bool      `json:"unlimited,omitempty"`
-	Fetched   time.Time `json:"fetched"`
-	Err       string    `json:"error,omitempty"`
+	Unlimited   bool      `json:"unlimited,omitempty"`
+	RemainCount int       `json:"quota_remain,omitempty"`
+	Fetched     time.Time `json:"fetched"`
+	Err         string    `json:"error,omitempty"`
 }
 
 type priceCache struct {
@@ -126,7 +127,13 @@ func (c *Client) PriceOf(ctx context.Context, groupKey, contentType string, mode
 func (s *Server) annotate(ctx context.Context, w http.ResponseWriter, modelKey, contentType string, modelID int) *Price {
 	p, err := s.c.PriceOf(ctx, modelKey, contentType, modelID, contentType)
 	if err != nil {
-		logf("WARN", "price lookup for %s failed: %v", modelKey, err)
+		// Quota-billed models (Midjourney) have no 灵力 price row, so the billing module
+		// answers with a generic error. Report the quota rather than a scary warning.
+		if n, ok := s.cat.RemainOf(modelKey); ok {
+			logf("INFO", "cost estimate: %s %s -> no 灵力 price upstream (quota-billed, remain=%d)", modelKey, contentType, n)
+		} else {
+			logf("WARN", "price lookup for %s failed: %v", modelKey, err)
+		}
 		return nil
 	}
 	logf("INFO", "cost estimate: %s %s -> list=%d 灵力, this account pays=%d 灵力 (%s)",
@@ -212,6 +219,18 @@ func (s *Server) modelList(ctx context.Context, withPrices bool) []map[string]an
 			if p, err := s.c.PriceOf(ctx, e.Key, contentType, e.ID, contentType); err == nil && p != nil {
 				entry["change_num"] = p.ChangeNum
 				entry["effective_change_num"] = p.Effective
+				entry["price_available"] = true
+			} else {
+				// Not every model has a 灵力 price row: quota-billed ones (Midjourney is
+				// remain_count=-1) make the billing module answer with a generic error.
+				// Say so instead of leaving the fields blank.
+				entry["price_available"] = false
+				entry["price_note"] = "upstream returned no price policy for this model (quota-billed)"
+			}
+		}
+		if e.Key != "" {
+			if n, ok := s.cat.RemainOf(e.Key); ok {
+				entry["quota_remain"] = n
 			}
 		}
 		out = append(out, entry)
@@ -267,11 +286,24 @@ func (s *Server) handleModelPrices(w http.ResponseWriter, r *http.Request) {
 			defer func() { <-sem }()
 			p, err := s.c.PriceOf(r.Context(), t.key, t.contentType, t.id, t.contentType)
 			if err != nil {
-				out[i] = &Price{GroupKey: t.key, Name: t.name, ContentType: t.contentType, ModelID: t.id, Err: err.Error()}
+				// No price row upstream (quota-billed models). Report the quota instead,
+				// which is the only signal the account gives for them.
+				entry := &Price{GroupKey: t.key, Name: t.name, ContentType: t.contentType, ModelID: t.id, Err: err.Error()}
+				if n, ok := s.cat.RemainOf(t.key); ok {
+					entry.Unlimited = n < 0
+					entry.RemainCount = n
+				}
+				out[i] = entry
 				return
 			}
 			p.Name = t.name
 			p.Unlimited = s.cat.IsUnlimited(t.key)
+			if n, ok := s.cat.RemainOf(t.key); ok {
+				p.RemainCount = n
+				if n < 0 {
+					p.Unlimited = true
+				}
+			}
 			out[i] = p
 		}(i, t)
 	}
