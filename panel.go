@@ -532,14 +532,15 @@ $('onlyimg').onchange = renderModels;
 $('onlyfree').onchange = renderModels;
 // A model the upstream declares no parameters for still needs a table in the plugin, or the
 // settings field cannot be filled at all. banana21 (香蕉2.1) is the case that exists: it is
-// absent from repair/params, so it has no aspect_ratio/image_size declaration — yet a real
-// session ran it with image_size 2K and no explicit ratio. Offer the ratios the plugin's own
-// default uses, at that tier, and say so rather than pretending it is declared.
+// absent from repair/params, so it has no aspect_ratio/image_size declaration — yet it does
+// accept a resolution tier (2K and 4K, per the operator; a real session ran it at 2K).
+// Offer the ratios the plugin's own default uses, at both tiers, and say it is a fallback
+// rather than pretending it was declared.
 function fallbackSizes() {
   return {
-    '1:1': { '2K': '2048x2048' },
-    '3:2': { '2K': '2048x1366' },
-    '2:3': { '2K': '1366x2048' }
+    '1:1': { '2K': '2048x2048', '4K': '4096x4096' },
+    '3:2': { '2K': '2048x1366', '4K': '4096x2730' },
+    '2:3': { '2K': '1366x2048', '4K': '2730x4096' }
   };
 }
 function selectedModel() {
