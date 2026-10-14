@@ -222,20 +222,29 @@ func main() {
 
 // ---- middleware --------------------------------------------------------------------
 
+// auth guards everything except /panel and /health.
+//
+// Two credentials are accepted: an API key (for clients) and the panel password (for the
+// operator). The panel is a browser page on the LAN, so a separate, shorter secret is more
+// practical there than the API key — and it means rotating one does not break the other.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		token := bearer(r)
+		if s.cfg.PanelPassword != "" && token == s.cfg.PanelPassword {
+			next(w, r)
+			return
+		}
 		if len(s.cfg.APIKeys) == 0 {
 			next(w, r)
 			return
 		}
-		token := bearer(r)
 		for _, k := range s.cfg.APIKeys {
 			if token == k {
 				next(w, r)
 				return
 			}
 		}
-		writeOpenAIError(w, http.StatusUnauthorized, "invalid_request_error", "invalid API key")
+		writeOpenAIError(w, http.StatusUnauthorized, "invalid_request_error", "invalid API key or panel password")
 	}
 }
 

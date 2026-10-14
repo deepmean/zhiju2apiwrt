@@ -6,6 +6,11 @@ LISTEN=0.0.0.0:8080
 # Comma separated Bearer tokens your clients must send. Leave empty and the port is
 # open to anyone who can reach it (the startup log warns about this).
 API_KEY=sk-change-me
+
+# 面板密码：/panel 用它登录，/admin/* 也接受它（浏览器页面因此不必保存 API Key）。
+# 空字符串 = 关闭。改这一个不会影响已发给客户端的 API Key，反之亦然。
+# 注意：面板是局域网页面，别把它暴露到公网。
+PANEL_PASSWORD=root
 LOG_LEVEL=INFO
 
 # --- upstream -----------------------------------------------------------------------

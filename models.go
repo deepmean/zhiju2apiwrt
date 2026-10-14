@@ -24,6 +24,12 @@ type Model struct {
 	IsDefault   bool           `json:"is_default"`
 	IsUnlimited bool           `json:"is_unlimited"`
 	Caps        map[string]any `json:"capacities"`
+
+	// Alias is an OpenAI-side name used instead of Key when the upstream key is awkward.
+	// It exists for tiers that only appear as picker entries: 即梦4.5 4K is `seedream454k-draw`
+	// upstream, so it is exposed as seedream454k-image while the request still carries
+	// model_code=seedream454k-draw.
+	Alias string `json:"-"`
 }
 
 type modelSnapshot struct {
@@ -215,47 +221,56 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 	}
 
 	// 4b) cfg/list also knows image-capable models the snapshot's draw/repair lists omit —
-	//     the 4K tiers, for instance: the snapshot carries only the 2K variants of 香蕉 Pro
-	//     and 香蕉 2, so nothing downstream could select 4K even though the site offers it.
+	//     every 4K tier, for instance: the snapshot carries only the 2K variants of 香蕉 Pro
+	//     and 香蕉 2, so nothing downstream could select 4K even though the account can use it.
 	//
-	//     The test is whether the site's own 图片创作 picker carries the model, and that
-	//     picker is cfg/list's models.draw list — an entry there is named `<key>-draw`. Using
-	//     `draw: true` alone is too loose: it also matches 全灵-2.5创作版/编辑版, which the
-	//     picker does not list at any tier (no gptimage25*-draw entry exists), so they would
-	//     have shown up with a brand name the operator does not recognise anywhere on the
-	//     site. Requiring the picker sibling keeps 香蕉 Pro 4K and 香蕉 2 4K and drops those.
+	//     The requirement is to expose everything usable, not to mirror one UI's picker, so
+	//     the test is "this account can create an image with it":
+	//       - entries flagged draw:true (the models the client creates images with), and
+	//       - picker entries (`-draw`) that have no draw:true sibling at all — 即梦4.5 4K
+	//         (id 111) and 即梦5.0 3K (id 131) exist only as picker entries, so skipping them
+	//         would hide two usable models.
 	//
 	//     They join the repair family, which is the chain the web client uses for them (a
 	//     real 香蕉 Pro 2K session sends model_code=nanobanana2 with the id cfg/list lists).
-	for key := range drawCapable {
-		if key == "" || !pickerKeys[key+"-draw"] {
-			continue
-		}
-		if _, ok := ids[key]; !ok {
-			continue // no id means nothing to call
-		}
-		already := false
+	//     A picker entry is exposed under its name without the -draw suffix, so the OpenAI
+	//     side reads seedream454k-image while the upstream still gets model_code
+	//     seedream454k-draw.
+	knownKey := func(key string) bool {
 		for _, group := range [][]Model{snap.Models["text"], snap.Models["draw"], snap.Models["repair"]} {
 			for _, m := range group {
 				if m.Key == key {
-					already = true
+					return true
 				}
 			}
 		}
-		if already {
-			continue
+		return false
+	}
+	addExtra := func(key, name, why string) {
+		if key == "" || knownKey(key) {
+			return
 		}
-		// Prefer the picker sibling's name: that is the string the operator sees on the
-		// site, and cfg/list sometimes brands the same model differently elsewhere.
+		if _, ok := ids[key]; !ok {
+			return // no id means nothing to call
+		}
+		if name == "" {
+			name = key
+		}
+		snap.Models["repair"] = append(snap.Models["repair"], Model{
+			Key: key, Alias: strings.TrimSuffix(key, "-draw"), Name: name, Type: "repair", Desc: why,
+		})
+		logf("INFO", "cfg/list adds an image model the snapshot omits: %s (id=%d, %s)", key, ids[key], name)
+	}
+	// The picker's own string is what the operator sees on the site, so prefer it.
+	for key := range drawCapable {
 		name := pickerNames[key+"-draw"]
 		if name == "" {
 			name = names[key]
 		}
-		snap.Models["repair"] = append(snap.Models["repair"], Model{
-			Key: key, Name: name, Type: "repair",
-			Desc: "image model from cfg/list, present in the site's 图片创作 picker",
-		})
-		logf("INFO", "cfg/list adds an image model the snapshot omits: %s (id=%d, %s)", key, ids[key], name)
+		addExtra(key, name, "image model from cfg/list (draw-capable)")
+	}
+	for key := range pickerKeys {
+		addExtra(key, pickerNames[key], "image model that exists only as a picker entry in cfg/list")
 	}
 
 	// 5) explicit overrides win, and an override for a key the upstream never declares also
@@ -323,6 +338,13 @@ func buildIndex(text, draw, repair []Model, ids map[string]int) map[string]Resol
 		if !ok {
 			return
 		}
+		// Alias lets an upstream key whose name is awkward face the OpenAI side under a
+		// cleaner one: 即梦4.5 4K exists only as `seedream454k-draw`, so it is exposed as
+		// seedream454k-image while the upstream still receives model_code seedream454k-draw.
+		base := m.Key
+		if m.Alias != "" {
+			base = m.Alias
+		}
 		// Presence means resolved: every declaration source only records an id it actually
 		// found (> 0), so an explicit models.map entry is the only way to reach here with 0
 		// — which is a real value, not a failure (banana21 is sent as model_id 0).
@@ -330,12 +352,12 @@ func buildIndex(text, draw, repair []Model, ids map[string]int) map[string]Resol
 		if family == "" {
 			family = "repair"
 		}
-		idx[m.Key+"-image"] = Resolved{
-			OpenAI: m.Key + "-image", Kind: kind, Key: m.Key, ID: id,
+		idx[base+"-image"] = Resolved{
+			OpenAI: base + "-image", Kind: kind, Key: m.Key, ID: id,
 			Name: m.Name, Desc: m.Desc, Family: family, Capability: "image",
 		}
-		idx[m.Key+"-image-edit"] = Resolved{
-			OpenAI: m.Key + "-image-edit", Kind: kind, Key: m.Key, ID: id,
+		idx[base+"-image-edit"] = Resolved{
+			OpenAI: base + "-image-edit", Kind: kind, Key: m.Key, ID: id,
 			Name: m.Name, Desc: m.Desc, Family: family, Capability: "image-edit",
 		}
 	}

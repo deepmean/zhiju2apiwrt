@@ -69,16 +69,16 @@ th.nowrap,td.nowrap{white-space:nowrap}
 <body>
 <div id="gate">
   <div class="gatebox">
-    <h2>需要 API Key</h2>
+    <h2>需要面板密码</h2>
     <p class="sub">面板本身不含任何密钥。填一次，浏览器会记住（只存在本机）。<br>
-       在路由器上执行 <span class="mono">grep API_KEY /opt/zhiju2api/zhiju2api.conf</span> 可以看到它。</p>
-    <input id="gatekey" type="password" placeholder="sk-..." autofocus>
+       密码在路由器上：<span class="mono">grep PANEL_PASSWORD /opt/zhiju2api/zhiju2api.conf</span>（默认 <span class="mono">root</span>）。</p>
+    <input id="gatekey" type="password" placeholder="面板密码" autofocus>
     <div class="row" style="margin-top:10px">
       <div style="flex:0 0 auto"><button id="gatesave">保存并进入</button></div>
     </div>
     <p class="sub" id="gateerr" style="color:#ff6b6b"></p>
-    <p class="sub">也可以直接带 key 打开（fragment 不会发给服务器）：<br>
-      <span class="mono">http://<span id="gatehost"></span>/panel#key=sk-...</span></p>
+    <p class="sub">API Key 同样可以进（给脚本用）；也可以带密码打开（fragment 不会发给服务器）：<br>
+      <span class="mono">http://<span id="gatehost"></span>/panel#key=root</span></p>
   </div>
 </div>
 <header><b>zhiju2api</b><span id="ver"></span><span style="flex:1"></span><span id="clock"></span></header>
@@ -87,7 +87,7 @@ th.nowrap,td.nowrap{white-space:nowrap}
 <section>
   <h3>接入</h3>
   <div class="row">
-    <div style="flex:3 1 240px"><label>API Key（只存在本机浏览器）</label><input id="key" type="password" placeholder="sk-..."></div>
+    <div style="flex:3 1 240px"><label>面板密码 / API Key（只存在本机浏览器）</label><input id="key" type="password" placeholder="面板密码，默认 root"></div>
     <div style="flex:0 0 auto"><button id="save">保存</button></div>
     <div style="flex:0 0 auto"><button class="ghost" id="reload">刷新</button></div>
   </div>
@@ -423,8 +423,8 @@ function refresh() {
     })
     .catch(function (e) {
       say('读取失败：' + e.message, 'bad');
-      $('keyState').textContent = 'API Key 无效或网关不可达';
-      if (/API key/i.test(e.message)) showGate('这个 API Key 不对，请重新输入');
+      $('keyState').textContent = '密码/API Key 无效，或网关不可达';
+      if (/invalid API key|password/i.test(e.message)) showGate('密码不对，请重新输入');
     });
 }
 
@@ -517,12 +517,12 @@ function boot() {
 }
 
 $('save').onclick = function () {
-  if (!applyKey($('key').value)) { say('请先填 API Key', 'warn'); return; }
+  if (!applyKey($('key').value)) { say('请先填面板密码', 'warn'); return; }
 };
 $('key').onkeydown = function (e) { if (e.key === 'Enter') $('save').onclick(); };
 $('gatesave').onclick = function () {
   var k = $('gatekey').value.trim();
-  if (!k) { $('gateerr').textContent = '请填入 API Key'; return; }
+  if (!k) { $('gateerr').textContent = '请填入面板密码'; return; }
   if (!applyKey(k)) { $('gateerr').textContent = '保存失败（浏览器可能禁用了 localStorage）'; return; }
   $('gatekey').value = '';
 };

@@ -319,11 +319,14 @@ tools/deploy-router.sh jcg --addr 192.168.26.1
 
 打开 `http://<router>:8080/panel`（访问 `/` 会重定向到这里）。
 
-面板 HTML 里**没有任何密钥**（谁打开都能看源码），所以每次接口调用都要你给一个 API Key：
+面板 HTML 里**没有任何密钥**（谁打开都能看源码），所以进面板要输一次密码：
 
-- 填一次就行（存浏览器 localStorage）；
-- 或者带 key 直接打开：`http://<router>:8080/panel#key=sk-...` —— **fragment 不会发给服务器**，也不进访问日志；
-- 没填 key 时页面**弹门禁**并聚焦输入框，而不是渲染成空壳（早期版本正是这样被误认为"面板坏了"）。
+- **面板密码**（`PANEL_PASSWORD`，默认 `root`）—— 和 API Key 分开，改一个不影响另一个；
+- 也可以带密码/API Key 直接打开：`http://<router>:8080/panel#key=root` —— **fragment 不会发给服务器**，也不进访问日志；
+- 没填时页面**弹门禁**并聚焦输入框，而不是渲染成空壳（早期版本正是这样被误认为"面板坏了"）。
+
+`/admin/*` 同时接受面板密码与 API Key，所以浏览器里不必存 API Key（脚本照旧用 Key）。
+默认密码是 `root`，**别把 8080 暴露到公网**。
 
 | 区块 | 内容 |
 | --- | --- |
@@ -623,6 +626,7 @@ API 调用会在账号里留下会话（对话、生图、MJ）。删它们**不
 | --- | --- | --- |
 | `LISTEN` | `0.0.0.0:8080` | 监听地址 |
 | `API_KEY` | *空* | 逗号分隔的 Bearer Token；为空则端口开放（启动会告警） |
+| `PANEL_PASSWORD` | `root` | 面板密码；`/admin/*` 同时接受它和 API Key（见 §7）。空 = 关闭 |
 | `UPSTREAM` | `https://agent.zhijuai.com` | 上游地址 |
 | `TOKENS_FILE` | `/opt/zhiju2api/tokens.txt` | 会话令牌文件 |
 | `MODEL_MAP_FILE` | `/opt/zhiju2api/models.map` | 模型 id 覆盖 |

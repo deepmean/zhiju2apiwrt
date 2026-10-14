@@ -75,6 +75,10 @@ type Config struct {
 	// How long before a token's exp the heartbeat starts warning about it. There is no
 	// renewal upstream, so expiry is a deadline the operator has to meet.
 	TokenExpiryWarnDays int
+	// PanelPassword is a second credential accepted by /admin/* and by the panel's own
+	// calls, so the browser page does not have to hold the API key. Empty disables it.
+	PanelPassword string
+
 	// A file the verification code can be dropped into during a pending login, so the
 	// code can arrive from an SMS forwarder or a single ssh command instead of a JSON
 	// request. Empty disables the watcher.
@@ -185,9 +189,10 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
-		Listen:    envStr("LISTEN", "0.0.0.0:8080"),
-		APIKeys:   keys,
-		LogLevel:  strings.ToUpper(envStr("LOG_LEVEL", "INFO")),
+		Listen:        envStr("LISTEN", "0.0.0.0:8080"),
+		APIKeys:       keys,
+		PanelPassword: envStr("PANEL_PASSWORD", "root"),
+		LogLevel:      strings.ToUpper(envStr("LOG_LEVEL", "INFO")),
 		Upstream:  strings.TrimRight(envStr("UPSTREAM", "https://agent.zhijuai.com"), "/"),
 		TokensF:   envStr("TOKENS_FILE", "/opt/zhiju2api/tokens.txt"),
 		ModelMapF: envStr("MODEL_MAP_FILE", "/opt/zhiju2api/models.map"),
