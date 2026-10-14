@@ -463,24 +463,33 @@ image request seedream4: aspect=3:2 (requested pixels 2048x1365 (snapped)), imag
 ### 图片模型清单（实付 = 本账号价格，来自服务端报价）
 
 每个模型都另有 `-image-edit` 变体（改图走同一条链，多带一张输入图）。
+**额度**列来自账号自己的 `models_remain`：有数字 = 账号可用，`不在额度表` = 上游没给这个 id 额度。
 
-| OpenAI 模型名 | 上游展示名 | 标价 | 本账号实付 | 档位 | 比例数 |
-|---|---|---:|---:|---|---:|
-| `seedream4-image` | 升智-1 | 80 | **0**（会员不限） | 1K / 2K | 10 |
-| `seedream452k-image` | 即梦4.5 | 160 | 152 | 2K | 10 |
-| `banana31FLite-image` | 香蕉 2-Lite（快速版） | 200 | 200 | 1K | 14 |
-| `seedream502k-image` | 即梦5.0 | 240 | 240 | 2K | 10 |
-| `gptimage2-image` | 升智-2 | 280 | 280 | 2K | 11 |
-| `nanobananaFlash22k-image` | 香蕉 2 | 300 | 304 | 2K | 14 |
-| `gptimage25flare2k-image` | 升智-2.5创作版 | 304 | 304 | 2K | 11 |
-| `gptimage25sunburst2k-image` | 升智-2.5编辑版 | 304 | 304 | 2K | 11 |
-| `nanobananaFlash24k-image` | 香蕉 2（4K高清） | 350 | 352 | **4K** | 14 |
-| `gptimage25flare4k-image` | 全灵-2.5创作版（4k超清） | 352 | 352 | **4K** | 11 |
-| `gptimage25sunburst4k-image` | 全灵-2.5编辑版（4k超清） | 352 | 352 | **4K** | 11 |
-| `nanobanana2-image` | 香蕉 Pro | 420 | 416 | 2K | 10 |
-| `nanobanana4k-image` | 香蕉 Pro（4K超清） | 520 | **520** | **4K** | 10 |
-| `banana21-image` | 香蕉2.1 | — | —（无价目） | 未声明 | — |
-| `mj2-image` | Midjourney V7（高稳版） | — | —（按次结算） | 无档位 | 3 |
+| OpenAI 模型名 | 上游展示名 | 标价 | 本账号实付 | 档位 | 额度 | 上游 key / id |
+|---|---|---:|---:|---|---:|---|
+| `seedream4-image` | 升智-1 | 80 | **0**（会员不限） | 1K / 2K | 2 | `seedream4` / 148 |
+| `seedream452k-image` | 即梦4.5 | 160 | 152 | 2K | 2 | `seedream452k` / 101 |
+| `banana31FLite-image` | 香蕉 2-Lite（快速版） | 200 | 200 | 1K | 2 | `banana31FLite` / 152 |
+| `seedream502k-image` | 即梦5.0 | 240 | 240 | 2K | 2 | `seedream502k` / 126 |
+| `gptimage2-image` | 升智-2 | 280 | 280 | 2K | 2 | `gptimage2` / 142 |
+| `nanobananaFlash22k-image` | 香蕉 2 | 300 | 304 | 2K | 2 | `nanobananaFlash22k` / 132 |
+| `gptimage25flare2k-image` | 升智-2.5创作版 | 304 | 304 | 2K | 2 | `gptimage25flare2k` / 172 |
+| `gptimage25sunburst2k-image` | 升智-2.5编辑版 | 304 | 304 | 2K | 2 | `gptimage25sunburst2k` / 174 |
+| `nanobananaFlash24k-image` | 香蕉 2（4K高清） | 350 | 352 | **4K** | 2 | `nanobananaFlash24k` / 133 |
+| `gptimage25flare4k-image` | 全灵-2.5创作版（4k超清） | 352 | 352 | **4K** | 2 | `gptimage25flare4k` / 173 |
+| `gptimage25sunburst4k-image` | 全灵-2.5编辑版（4k超清） | 352 | 352 | **4K** | 2 | `gptimage25sunburst4k` / 175 |
+| `nanobanana2-image` | 香蕉 Pro | 420 | 416 | 2K | 2 | `nanobanana2` / 97 |
+| `nanobanana4k-image` | 香蕉 Pro（4K超清） | 520 | **520** | **4K** | 2 | `nanobanana4k` / 98 |
+| `banana21-image` | 香蕉2.1 | — | —（无价目） | 未声明 | — | `banana21` / 0 |
+| `seedream454k-image` | 即梦4.5（4K超清） | — | —（无价目） | 未声明 | **不在额度表** | `seedream454k-draw` / 111 |
+| `seedream503k-image` | 即梦5.0（3K超清） | — | —（无价目） | 未声明 | **不在额度表** | `seedream503k-draw` / 131 |
+| `mj-image` | 绘画MJ-V7 | — | —（按次结算） | 无档位 | -1 | `mj` / 8 |
+| `mj2-image` | Midjourney V7（高稳版） | — | —（按次结算） | 无档位 | — | `mj2` / 139 |
+
+**"网页上没有"不等于无效**：图片创作选择器只列 12 个模型，而账号额度表里有 107 个 id。
+`gptimage25flare4k`（升智-2.5创作 4K）就是例子 —— 选择器不列它，但账号额度是 2，可用。
+反过来，`seedream454k-draw` / `seedream503k-draw` 只存在于选择器里、额度表里没有，**存疑**。
+`mj`（id 8）额度写着不限，但实测任务会卡在 `waiting`（要用 `mj2` / 139）。
 
 **4K 是独立模型，不是 2K 模型的档位**，而且更贵：
 
@@ -493,7 +502,7 @@ image request seedream4: aspect=3:2 (requested pixels 2048x1365 (snapped)), imag
 
 所以在插件里用 4K 要**换「模型」字段**（填 `nanobanana4k-image`），不是换分辨率下拉。
 这些 4K 条目并不在上游快照的 draw/repair 列表里（那两张表只有 2K 变体），是网关从
-`cfg/list` 中 `draw: true` 的条目补进索引的 —— 见 §14 的目录构建说明。
+`cfg/list` 补进索引的 —— 判据是"账号能用"，见 §14 的目录构建说明。
 
 `banana21`（香蕉2.1）是另一种情况：快照里有它、名字就叫"香蕉2.1"，但**没有 `model_id`**，
 网页端发 `model_id: 0`，所以只能靠 `models.map` 手工登记（见 §12）。
