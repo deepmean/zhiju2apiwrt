@@ -253,13 +253,22 @@ func (cat *Catalog) Refresh(ctx context.Context, force bool) error {
 		if _, ok := ids[key]; !ok {
 			return // no id means nothing to call
 		}
+		// The alias is what the OpenAI side sees, so it must not collide either: a
+		// `-draw` entry whose base model is already listed (nanobanana2-draw alongside
+		// nanobanana2) would otherwise overwrite the base entry — and with the picker's id,
+		// not the base id the site actually uses for image creation.
+		alias := strings.TrimSuffix(key, "-draw")
+		if alias != key && knownKey(alias) {
+			return
+		}
 		if name == "" {
 			name = key
 		}
 		snap.Models["repair"] = append(snap.Models["repair"], Model{
-			Key: key, Alias: strings.TrimSuffix(key, "-draw"), Name: name, Type: "repair", Desc: why,
+			Key: key, Alias: alias, Name: name, Type: "repair", Desc: why,
 		})
-		logf("INFO", "cfg/list adds an image model the snapshot omits: %s (id=%d, %s)", key, ids[key], name)
+		logf("INFO", "cfg/list adds an image model the snapshot omits: %s as %s (id=%d, %s)",
+			key, alias+"-image", ids[key], name)
 	}
 	// The picker's own string is what the operator sees on the site, so prefer it.
 	for key := range drawCapable {
