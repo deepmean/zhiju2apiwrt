@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -267,17 +268,38 @@ func pickRepairURLs(page repairPage) []string {
 }
 
 // terminalRepairState reports the last status/content seen, for error reporting.
+// terminalRepairState reports the task's terminal status and the text that goes with it.
+//
+// The page groups messages in a map keyed by the parent message id, and Go's map iteration
+// order is random — so "the last message wins" made this return complete or failure at
+// random on a page that holds both. The assistant's own turn is the one carrying ref_id (the
+// operator's turn has none), and within it the highest msg_id is the newest, so ordering by
+// ref_id + msg_id makes the answer deterministic and semantically right.
 func terminalRepairState(page repairPage) (status, text string) {
+	type cand struct{ id, status, content string }
+	var withRef, anyMsg []cand
 	for _, item := range page.Items {
 		for _, msgs := range item.Messages {
 			for _, m := range msgs {
-				if m.Status != "" {
-					status = m.Status
-				}
-				if m.Content != "" && !strings.HasPrefix(strings.TrimSpace(m.Content), "[{") {
-					text = m.Content
+				c := cand{id: m.MsgID, status: m.Status, content: m.Content}
+				anyMsg = append(anyMsg, c)
+				if m.RefID != "" {
+					withRef = append(withRef, c)
 				}
 			}
+		}
+	}
+	list := withRef
+	if len(list) == 0 {
+		list = anyMsg // a page with no reply grouping: fall back rather than report nothing
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].id < list[j].id })
+	for _, c := range list {
+		if c.status != "" {
+			status = c.status
+		}
+		if c.content != "" && !strings.HasPrefix(strings.TrimSpace(c.content), "[{") {
+			text = c.content
 		}
 	}
 	return status, text
