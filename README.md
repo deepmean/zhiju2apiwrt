@@ -597,10 +597,13 @@ tools/daily-checkin.mjs                    # 直连上游，或 ZHIJU_GATEWAY �
 2. Name 填 **`ZHIJU_TOKEN`**，Value 填上游 JWT（路由器上 `head -1 /opt/zhiju2api/tokens.txt`）
 3. 之后每天 06:06（北京时间）自动跑；也可以在 Actions 页面点 `Run workflow` 手动触发
 
-> **实测限制（重要）**：上游对**数据中心/代理 IP** 会回 `HTTP 405`，家宽 IP 正常。
-> 我这边走代理的机器每次都是 405，而路由器（家宽）一直成功 —— 所以 GitHub 的 runner
-> **有可能被拦**。脚本已带退避重试（405/429/5xx 重试 3 次），但仍不保证。
-> 想稳就挂一台家宽上的 self-hosted runner；或者干脆只靠路由器自己的定时任务（推荐，零依赖）。
+> **实测结论（2026-10-20，真跑过两次）**：上游对**数据中心/代理 IP** 一律回 `HTTP 405`，家宽 IP 正常。
+> GitHub 托管 runner 就是数据中心 —— 所以这个 job 在 GitHub 上**跑不成**。当时 secret 与令牌都没问题
+> （脚本解出 `EMEM`、剩余 92 天），三个接口全是 405；退避重试也没用，这是 IP 策略不是网络抖动。
+>
+> 能用的两条路：
+> 1. **路由器自己的定时任务**（已配 `SIGNIN_AT=06:06`，幂等，推荐 —— 零依赖）；
+> 2. 给仓库挂一台**家宽上的 self-hosted runner**，把 `runs-on` 改成 `self-hosted`。
 >
 > 另外 GitHub 会在仓库 60 天无活动后自动停用定时 workflow。
 

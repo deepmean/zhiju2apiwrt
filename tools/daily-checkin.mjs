@@ -109,10 +109,17 @@ async function upstream() {
 
   let code = 0
 
+  // 405 是"这个出口 IP 被拦"，不是配置问题：实测家宽正常、GitHub runner 全 405。
+  // 这种情况再怎么重试也没用，所以把结论说清楚，别让人去查 secret。
+  const blocked = (r) => r.status === 405
+  const blockedHint = '上游按出口 IP 拦了这个请求（HTTP 405）。实测家宽正常、GitHub 托管 runner 全 405；' +
+    '日常签到请依赖路由器自己的定时任务（SIGNIN_AT=06:06），或给仓库挂一台家宽上的 self-hosted runner。'
+
   // 1) 签到。ret=2016 是"已经签到"，属正常。
   const sign = await post('/v1/aimoss/task/sign')
   if (sign.json?.ret === 1) say('✓ 签到成功')
   else if (sign.json?.ret === 2016) say(`• 今天已签到（${sign.json.msg || '已经签到'}）`)
+  else if (blocked(sign)) { say(`✗ 签到失败：${blockedHint}`); code = 1 }
   else { say(`✗ 签到失败：HTTP ${sign.status} ret=${sign.json?.ret} ${sign.json?.msg ?? sign.text.slice(0, 120)}`); code = 1 }
 
   // 2) 积分任务：列表里出现什么就做完什么。

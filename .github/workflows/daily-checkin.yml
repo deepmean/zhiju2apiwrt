@@ -9,22 +9,20 @@ name: daily check-in
 #
 # 时间：cron 是 UTC，'6 22 * * *' = 次日 06:06 北京时间。
 #
-# ⚠ 两条实测限制：
-#   1. 上游对**数据中心/代理 IP** 会回 HTTP 405（家宽 IP 正常）。GitHub 的 runner 就是数据中心，
-#      所以这个 job 有可能被拦；脚本已带退避重试，但仍可能失败。
-#      最可靠的是路由器自己的定时任务（SIGNIN_ENABLED=true + SIGNIN_AT=06:06），两者幂等可并存。
-#   2. 仓库 60 天无活动后，GitHub 会自动停用定时 workflow。
+# ⚠ 实测结论（2026-10-20，本仓库真跑过两次）：
+#   上游对**数据中心/代理 IP** 一律回 HTTP 405，家宽 IP 正常。GitHub 托管 runner 就是数据中心，
+#   所以这个 job 在 GitHub 上**跑不成**——secret 与令牌都没问题（脚本解出 EMEM / 剩余 92 天），
+#   三个接口全是 405。脚本带退避重试，但这是 IP 策略，重试无效。
 #
-# 想在 GitHub 上稳定跑，就给这个仓库挂一台家宽上的 self-hosted runner：
-#   Settings -> Actions -> Runners -> New self-hosted runner
+#   可用的两条路：
+#     1) 路由器自己的定时任务（已配 SIGNIN_AT=06:06，幂等，推荐）；
+#     2) 给这个仓库挂一台家宽上的 self-hosted runner，再把 runs-on 改成 self-hosted。
+#
+#   另外 GitHub 会在仓库 60 天无活动后自动停用定时 workflow。
 
 on:
   schedule:
     - cron: '6 22 * * *'
-  # TEMPORARY: smoke test on push. Removed in the very next commit — every push signing in
-  # would be noise, and the schedule is what this workflow is for.
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       gateway:
