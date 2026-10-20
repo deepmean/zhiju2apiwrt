@@ -95,7 +95,10 @@ func (l *RecordLedger) Add(kind, sessionID, model, prompt string) {
 	}
 	l.items = append(l.items, APIRecord{
 		Kind: kind, SessionID: sessionID, Model: model,
-		Prompt: truncateRunes(prompt, 120), CreatedAt: time.Now(),
+		// In(localLoc), not time.Now() as-is: Go does not read the POSIX TZ that OpenWrt
+		// sets, so plain time.Now() here is UTC and the panel showed every record eight
+		// hours early. localLoc is resolved from TZ_NAME at startup.
+		Prompt: truncateRunes(prompt, 120), CreatedAt: time.Now().In(localLoc),
 	})
 	if len(l.items) > l.max {
 		l.items = l.items[len(l.items)-l.max:]
@@ -116,7 +119,7 @@ func (l *RecordLedger) MarkDeleted(sessionIDs ...string) {
 	for i := range l.items {
 		if want[l.items[i].SessionID] {
 			l.items[i].Deleted = true
-			l.items[i].DeletedAt = time.Now()
+			l.items[i].DeletedAt = time.Now().In(localLoc)
 		}
 	}
 	snapshot := append([]APIRecord(nil), l.items...)

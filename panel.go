@@ -324,6 +324,19 @@ function renderModels() {
   });
 }
 
+// Server timestamps arrive as RFC3339. Slicing the string silently shows whatever offset the
+// server wrote — UTC in this deployment, which reads eight hours early. Parse and format in
+// the browser instead, so the value is in the viewer's timezone and rows written before the
+// fix are corrected too.
+function fmtTime(v) {
+  if (!v) return '-';
+  var d = new Date(v);
+  if (isNaN(d.getTime())) return String(v);
+  var p = function (n) { return (n < 10 ? '0' : '') + n };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+    p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
 // --- cloud records ------------------------------------------------------------------
 function renderRecords(list) {
   if (!list || !list.length) {
@@ -337,7 +350,7 @@ function renderRecords(list) {
     if (r.deleted) src = '<span class="tag">已删</span>';
     rows.push('<tr><td>' + box + '</td><td>' + esc(r.kind) + '</td><td>' + esc(r.model || '') + '</td>' +
       '<td class="mono">' + esc(r.session_id) + '</td><td class="sub" style="white-space:normal;max-width:300px">' + esc(r.prompt || '') + '</td>' +
-      '<td class="mono">' + esc(String(r.created_at || '').replace('T', ' ').slice(0, 19)) + '</td>' +
+      '<td class="mono">' + esc(fmtTime(r.created_at)) + '</td>' +
       '<td>' + src + '</td></tr>');
   });
   $('records').innerHTML = rows.join('');
@@ -391,8 +404,8 @@ function renderTasks(t) {
   var cards = [
     ['开关', d.enabled ? '已启用' : '未启用'],
     ['定时', d.at || '-'],
-    ['上次执行', d.last_run ? String(d.last_run).replace('T', ' ').slice(0, 19) : '-'],
-    ['下次执行', d.next_run ? String(d.next_run).replace('T', ' ').slice(0, 19) : '-'],
+    ['上次执行', fmtTime(d.last_run)],
+    ['下次执行', fmtTime(d.next_run)],
     ['结果', d.last_result || '-'],
     ['当前余额', t.balance === undefined ? '-' : t.balance]
   ];
