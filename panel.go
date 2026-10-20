@@ -113,6 +113,21 @@ th.nowrap,td.nowrap{white-space:nowrap}
 </section>
 
 <section>
+  <h3>反向：把令牌写回浏览器</h3>
+  <div class="hint">
+    浏览器掉登录后，用网关手里的令牌直接把你登回去。站点把会话存在
+    <span class="mono">localStorage.SECRET_TOKEN</span>（<b>不是 cookie</b> —— API 只用
+    <span class="mono">x-token-id</span> 头鉴权），所以注入的是这一条存储项。<br>
+    Chrome 136+ 的默认 profile 不允许开调试端口，所以这里给你一个书签，比 DevTools 省事。
+  </div>
+  <div class="row" style="margin-top:8px">
+    <div style="flex:0 0 auto"><a class="btn book" id="injectbook" href="#">拖我到书签栏（注入用）</a></div>
+    <div style="flex:0 0 auto"><button class="ghost" id="injectsnippet">复制控制台代码</button></div>
+  </div>
+  <div class="hint" id="injectState"></div>
+</section>
+
+<section>
   <h3>账号状态</h3>
   <div class="grid" id="cards"><div class="kv"><i>状态</i><b>未连接</b></div></div>
   <div class="scroll" style="margin-top:10px"><table id="tokens"></table></div>
@@ -193,7 +208,7 @@ th.nowrap,td.nowrap{white-space:nowrap}
 </main>
 <script>
 var $ = function (id) { return document.getElementById(id); };
-var state = { session: null, models: [], account: null, selected: null, memKey: '' };
+var state = { session: null, models: [], account: null, selected: null, memKey: '', injectJs: '' };
 
 function api(path, opts) {
   opts = opts || {};
@@ -410,6 +425,29 @@ $('taskrun').onclick = function () {
     .catch(function (e) { $('taskmsg').textContent = '执行失败：' + e.message; });
 };
 
+// --- reverse direction: write the gateway's token back into the browser -----------------
+// The site stores its session in localStorage.SECRET_TOKEN (no cookie), so "log the browser
+// back in" is one setItem. A bookmarklet is the practical way in: Chrome 136+ refuses to open
+// a debugging port on the default profile, so a CDP injection cannot reach the operator's own
+// browser.
+function loadInject() {
+  return api('/admin/token-inject')
+    .then(function (r) {
+      state.injectJs = r.js;
+      var a = $('injectbook');
+      a.href = r.bookmarklet;
+      a.onclick = function (ev) { ev.preventDefault(); alert('把本链接拖到书签栏，然后在升智页面上点它。'); };
+      $('injectState').textContent = '令牌 ' + r.token_preview + '，剩余 ' + r.days_left + ' 天（到期 ' + r.expires + '）';
+    })
+    .catch(function (e) { $('injectState').textContent = '读取令牌失败：' + e.message; });
+}
+$('injectsnippet').onclick = function () {
+  if (!state.injectJs) { say('还没拿到令牌，稍等或刷新页面', 'warn'); return; }
+  $('cfgbox').value = state.injectJs;
+  if (navigator.clipboard) navigator.clipboard.writeText(state.injectJs).catch(function () {});
+  say('已复制控制台代码 —— 在升智页面按 F12 → Console 粘贴回车即可登录', 'ok');
+};
+
 function refresh() {
   $('clock').textContent = new Date().toLocaleTimeString();
   if (!(storedKey() || state.memKey)) { showGate(''); return Promise.resolve(); }
@@ -419,7 +457,7 @@ function refresh() {
       renderSession(r[0]); renderModels(); renderAccount(r[2]);
       $('keyState').textContent = '已连接 ' + location.host + '，每 30 秒自动刷新';
       say('');
-      return Promise.all([loadRecords(), loadTasks()]);
+      return Promise.all([loadRecords(), loadTasks(), loadInject()]);
     })
     .catch(function (e) {
       say('读取失败：' + e.message, 'bad');

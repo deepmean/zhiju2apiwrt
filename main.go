@@ -181,6 +181,7 @@ func main() {
 		http.Redirect(w, r, "/panel", http.StatusFound)
 	})
 	mux.HandleFunc("/admin/tokens", srv.auth(srv.handleAdminTokens))
+	mux.HandleFunc("/admin/token-inject", srv.auth(srv.handleTokenInject))
 	mux.HandleFunc("/admin/account", srv.auth(srv.handleAccount))
 	mux.HandleFunc("/admin/records", srv.auth(srv.handleRecords))
 	mux.HandleFunc("/admin/records/delete", srv.auth(srv.handleRecordsDelete))

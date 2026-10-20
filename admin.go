@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -548,6 +549,57 @@ func (s *Server) handleRecordsDelete(w http.ResponseWriter, r *http.Request) {
 		"failed":  failed,
 		"errors":  errors,
 		"pending": len(s.records.Pending()),
+	})
+}
+
+// handleTokenInject hands back the gateway's token in the two shapes a browser can take it:
+// a bookmarklet, and a snippet for the DevTools console.
+//
+// The site keeps its session in localStorage under SECRET_TOKEN, as JSON written by its own
+// helper: {data: <jwt>, expire: <ms epoch>} with a 7-day TTL. No cookie is involved — the API
+// authenticates with the x-token-id header — so "log the browser back in" means writing that
+// one storage entry, not setting a cookie.
+//
+//	GET /admin/token-inject
+func (s *Server) handleTokenInject(w http.ResponseWriter, r *http.Request) {
+	all := s.pool.All()
+	if len(all) == 0 {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "no session token configured")
+		return
+	}
+	// Pick the healthiest token: injecting an expired one gives the site a session it rejects.
+	chosen := all[0]
+	for _, t := range all {
+		if t.stateLocked() == "ok" {
+			chosen = t
+			break
+		}
+	}
+	tok := chosen.Value
+	if tok == "" {
+		writeOpenAIError(w, http.StatusInternalServerError, "server_error", "token value unavailable")
+		return
+	}
+
+	// Same shape the site writes, including the 7-day TTL, so its own expiry check behaves
+	// as it would after a normal login.
+	js := "(function(){try{" +
+		"localStorage.setItem('SECRET_TOKEN',JSON.stringify({data:" + strconv.Quote(tok) + ",expire:Date.now()+604800000}));" +
+		"location.reload()}catch(e){alert('注入失败: '+e)}})()"
+
+	preview := tok
+	if len(preview) > 18 {
+		preview = preview[:12] + "…" + preview[len(preview)-6:]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"origin":        "https://agent.zhijuai.com",
+		"storage_key":   "SECRET_TOKEN",
+		"bookmarklet":   "javascript:" + js,
+		"js":            js,
+		"token_preview": preview,
+		"expires":       chosen.Exp.Format(time.RFC3339),
+		"days_left":     int(chosen.daysLeft()),
+		"note":          "在升智页面上执行（书签或 DevTools 控制台）。站点用 localStorage 而不是 cookie，所以没有 cookie 可注入。",
 	})
 }
 
