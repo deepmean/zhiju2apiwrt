@@ -66,7 +66,18 @@ jobs:
           ZHIJU_TOKEN: ${{ secrets.ZHIJU_TOKEN }}
           ZHIJU_GATEWAY: ${{ inputs.gateway }}
           ZHIJU_PANEL_PASSWORD: ${{ secrets.ZHIJU_PANEL_PASSWORD }}
-        run: node tools/daily-checkin.mjs
+        run: |
+          set +e
+          node tools/daily-checkin.mjs 2>&1 | tee /tmp/checkin.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != "0" ]; then
+            # 把脚本输出变成注解：job 日志需要 token 才能读，注解不需要。
+            echo "::error title=签到失败（退出码 $code）::逐行见下面注解"
+            tail -n 40 /tmp/checkin.log | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error title=checkin::$line"
+            done
+          fi
+          exit "$code"
 
       - name: 结果摘要
         if: always()
