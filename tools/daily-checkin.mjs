@@ -109,17 +109,22 @@ async function upstream() {
 
   let code = 0
 
-  // 405 是"这个出口 IP 被拦"，不是配置问题：实测家宽正常、GitHub runner 全 405。
-  // 这种情况再怎么重试也没用，所以把结论说清楚，别让人去查 secret。
-  const blocked = (r) => r.status === 405
-  const blockedHint = '上游按出口 IP 拦了这个请求（HTTP 405）。实测家宽正常、GitHub 托管 runner 全 405；' +
-    '日常签到请依赖路由器自己的定时任务（SIGNIN_AT=06:06），或给仓库挂一台家宽上的 self-hosted runner。'
-
   // 1) 签到。ret=2016 是"已经签到"，属正常。
   const sign = await post('/v1/aimoss/task/sign')
+
+  // 405 = 这个出口 IP 被上游拦（实测家宽正常、GitHub 托管 runner 全 405）。
+  // 这是环境限制，不是配置错误：重试无用，也不该每天给你发一封"失败"邮件。
+  // 所以这里给警告并正常退出；真正的错误（令牌失效、上游 5xx）才会失败。
+  if (sign.status === 405) {
+    say('⚠ 上游按出口 IP 拦了请求（HTTP 405）：本次没有签到。')
+    say('  实测家宽正常、GitHub 托管 runner 全 405 —— 上游策略，不是配置问题。')
+    say('  日常签到请依赖路由器定时任务（SIGNIN_AT=06:06）；或给仓库挂家宽 self-hosted runner。')
+    if (process.env.GITHUB_ACTIONS) say('::warning title=被上游 405 拦::本次未签到，属出口 IP 限制；见 README「在 GitHub 上定时签到」')
+    return 0
+  }
+
   if (sign.json?.ret === 1) say('✓ 签到成功')
   else if (sign.json?.ret === 2016) say(`• 今天已签到（${sign.json.msg || '已经签到'}）`)
-  else if (blocked(sign)) { say(`✗ 签到失败：${blockedHint}`); code = 1 }
   else { say(`✗ 签到失败：HTTP ${sign.status} ret=${sign.json?.ret} ${sign.json?.msg ?? sign.text.slice(0, 120)}`); code = 1 }
 
   // 2) 积分任务：列表里出现什么就做完什么。
