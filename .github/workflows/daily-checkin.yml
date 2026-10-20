@@ -21,6 +21,10 @@ name: daily check-in
 on:
   schedule:
     - cron: '6 22 * * *'
+  # TEMPORARY: smoke test on push. Removed in the very next commit — every push signing in
+  # would be noise, and the schedule is what this workflow is for.
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       gateway:
