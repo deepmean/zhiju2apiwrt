@@ -170,6 +170,7 @@ func main() {
 	mux.HandleFunc("/v1/images/generations", srv.auth(srv.handleImageGenerations))
 	mux.HandleFunc("/v1/images/edits", srv.auth(srv.handleImageEdits))
 	mux.HandleFunc("/health", srv.handleHealth)
+	mux.HandleFunc("/cors", srv.handleCorsProbe)
 	mux.HandleFunc("/panel", srv.handlePanel)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Anything that is not one of the API routes gets the panel, so opening the
@@ -195,7 +196,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           mux,
+		Handler:           cors(noCache(mux)),
 		ReadHeaderTimeout: 15 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -247,6 +248,85 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid_request_error", "invalid API key or panel password")
 	}
+}
+
+// cors answers preflight requests and adds the headers a browser needs to call this gateway
+// from another origin.
+//
+// This matters more here than in a typical API: the operator drives the gateway from a
+// browser canvas (canvas.best, and a local copy of the same app at
+// C:\softwares\infinite-canvas), so every request is a cross-origin fetch carrying an
+// Authorization header. Without these headers the preflight fails and the page reports
+// "cannot load the model list" — the gateway itself is healthy, which is the confusing part.
+// The set mirrors the sibling service on :8017 that already works.
+//
+// Three gates a browser applies, only two of which the server can fix:
+//  1. CORS preflight: OPTIONS must answer Access-Control-Allow-*, or the real request never
+//     happens. A service that only handles POST answers 405 and the browser gives up.
+//  2. Private Network Access: Chrome wants Access-Control-Allow-Private-Network: true before
+//     a public page may reach a LAN address.
+//  3. Mixed content: an HTTPS page fetching http://<LAN-IP> is refused before the request
+//     leaves the browser (only localhost/127.0.0.1 count as trustworthy). No header fixes
+//     that — it needs HTTPS on this side, or an http page. Serving the canvas locally (as
+//     the operator does) sidesteps it entirely.
+func cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", "*")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", strings.Join([]string{
+				"Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With",
+				"x-api-key", "x-panel-password", "x-zhiju-key",
+			}, ", "))
+			// Cache the preflight so every request does not pay an extra round trip.
+			h.Set("Access-Control-Max-Age", "86400")
+			// The cost headers are worth reading from the client side.
+			h.Set("Access-Control-Expose-Headers", "x-zhiju-list-cost, x-zhiju-estimated-cost, x-request-id")
+			h.Set("Access-Control-Allow-Private-Network", "true")
+			// Preflights can carry headers beyond our list; declare those too.
+			if asked := r.Header.Get("Access-Control-Request-Headers"); asked != "" {
+				h.Set("Access-Control-Allow-Headers", asked+", "+h.Get("Access-Control-Allow-Headers"))
+			}
+			h.Add("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// noCache keeps the panel and the model list out of browser and proxy caches: after a config
+// change a refresh should show the new state, not yesterday's.
+func noCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/panel") || strings.HasPrefix(r.URL.Path, "/admin/") ||
+			strings.HasPrefix(r.URL.Path, "/v1/models") || r.URL.Path == "/health" {
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleCorsProbe is a self-check: open /cors in a browser and the answer shows whether the
+// server side of the browser's three gates is in order.
+func (s *Server) handleCorsProbe(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":           true,
+		"origin":       r.Header.Get("Origin"),
+		"host":         r.Host,
+		"client_ip":    r.RemoteAddr,
+		"cors_enabled": true,
+		"pna_enabled":  true,
+		"hints": []string{
+			"若控制台仍报 CORS：检查请求是否被 http→https 重定向（重定向会丢掉 CORS 头）",
+			"若报 Mixed Content：页面是 https 而本服务是 http，浏览器在发请求前就拒了，服务端任何头都救不了 —— 本地起画布（http）或用 HTTPS 前端",
+			"从其它设备访问时把 LISTEN 设为 0.0.0.0，并务必设上 API_KEY / PANEL_PASSWORD",
+		},
+	})
 }
 
 func bearer(r *http.Request) string {
