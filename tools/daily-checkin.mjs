@@ -81,12 +81,30 @@ async function upstream() {
     'x-platform': 'web_browser',
     ver: '2.2.11',
   }
+  // 重试：上游对数据中心/代理 IP 会回 405（不是 401，也不是 404），几分钟后可能就好了。
+  // 这个 job 一天只跑一次，多等一会儿比直接失败划算。
+  const RETRY_STATUS = new Set([405, 408, 425, 429, 500, 502, 503, 504])
   const post = async (path, body) => {
-    const res = await fetch(BASE + path, { method: 'POST', headers: H, body: JSON.stringify(body ?? {}) })
-    const text = await res.text()
-    let j = null
-    try { j = JSON.parse(text) } catch { /* 非 JSON */ }
-    return { status: res.status, json: j, text }
+    let last = null
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(BASE + path, { method: 'POST', headers: H, body: JSON.stringify(body ?? {}) })
+        const text = await res.text()
+        let j = null
+        try { j = JSON.parse(text) } catch { /* 非 JSON */ }
+        if (res.ok || !RETRY_STATUS.has(res.status) || attempt === 3) {
+          return { status: res.status, json: j, text }
+        }
+        last = { status: res.status, json: j, text }
+      } catch (e) {
+        last = { status: 0, json: null, text: String(e && e.message ? e.message : e) }
+        if (attempt === 3) return last
+      }
+      const wait = attempt === 1 ? 3000 : 9000
+      say(`  · ${path} 返回 ${last.status}，${wait / 1000}s 后重试（${attempt}/3）`)
+      await new Promise((r) => setTimeout(r, wait))
+    }
+    return last
   }
 
   let code = 0

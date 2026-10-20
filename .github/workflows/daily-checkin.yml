@@ -5,11 +5,18 @@ name: daily check-in
 # 需要在仓库里配置一个 secret：
 #   Settings -> Secrets and variables -> Actions -> New repository secret
 #   Name:  ZHIJU_TOKEN
-#   Value: 上游会话 JWT（路由器上 /opt/zhiju2api/tokens.txt 的第一行）
+#   Value: 上游会话 JWT —— 路由器上 `head -1 /opt/zhiju2api/tokens.txt`
 #
-# cron 是 UTC。22:06 UTC = 次日 06:06 北京时间。
-# GitHub 的定时任务在高峰期可能延迟几分钟到几十分钟，也会在仓库 60 天无活动后自动停用 ——
-# 想更可靠就让路由器自己的定时任务（SIGNIN_ENABLED=true）继续跑，两边都是幂等的。
+# 时间：cron 是 UTC，'6 22 * * *' = 次日 06:06 北京时间。
+#
+# ⚠ 两条实测限制：
+#   1. 上游对**数据中心/代理 IP** 会回 HTTP 405（家宽 IP 正常）。GitHub 的 runner 就是数据中心，
+#      所以这个 job 有可能被拦；脚本已带退避重试，但仍可能失败。
+#      最可靠的是路由器自己的定时任务（SIGNIN_ENABLED=true + SIGNIN_AT=06:06），两者幂等可并存。
+#   2. 仓库 60 天无活动后，GitHub 会自动停用定时 workflow。
+#
+# 想在 GitHub 上稳定跑，就给这个仓库挂一台家宽上的 self-hosted runner：
+#   Settings -> Actions -> Runners -> New self-hosted runner
 
 on:
   schedule:
@@ -44,20 +51,19 @@ jobs:
           ZHIJU_TOKEN: ${{ secrets.ZHIJU_TOKEN }}
         run: |
           if [ -z "$ZHIJU_TOKEN" ]; then
-            echo "::error title=缺少 ZHIJU_TOKEN::在 Settings -> Secrets and variables -> Actions 里添加 ZHIJU_TOKEN（上游会话 JWT）"
+            echo "::error title=缺少 ZHIJU_TOKEN::在 Settings -> Secrets and variables -> Actions 里添加 ZHIJU_TOKEN（路由器上 head -1 /opt/zhiju2api/tokens.txt）"
             exit 2
           fi
           echo "secret 已配置（长度 ${#ZHIJU_TOKEN}）"
 
       - name: 签到并做任务
+        id: checkin
         env:
           ZHIJU_TOKEN: ${{ secrets.ZHIJU_TOKEN }}
           ZHIJU_GATEWAY: ${{ inputs.gateway }}
           ZHIJU_PANEL_PASSWORD: ${{ secrets.ZHIJU_PANEL_PASSWORD }}
         run: node tools/daily-checkin.mjs
 
-      - name: 结果
+      - name: 结果摘要
         if: always()
-        run: |
-          echo "退出码：${{ steps.checkin.outcome }}" >/dev/null 2>&1 || true
-          echo "见上面的日志与本次运行的 Summary"
+        run: echo "本步骤结果：${{ steps.checkin.outcome }}（明细见上方日志与本次运行的 Summary）"

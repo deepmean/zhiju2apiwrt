@@ -577,10 +577,34 @@ reward / box / account 五族约 50 个候选路由，**只有这三个存在**�
 
 调度：
 
-- 每天 `SIGNIN_AT`（默认 `00:05`，本地时区）跑一次；
+- 每天 `SIGNIN_AT`（默认 `00:05`，本地时区）跑一次；本机路由器上设成了 **`06:06`**；
 - **启动后 20 秒也补跑一次** —— 幂等（重复调用返回"已经签到"），所以重启不会漏签；
 - 同时扫任务列表，出现什么就做完什么；
 - 手动触发：面板"立即执行"或 `POST /admin/tasks/run`；状态见 `GET /admin/tasks`。
+
+### 在 GitHub 上定时签到（可选，作为备份）
+
+仓库里带了一个独立的脚本和 workflow，不依赖路由器：
+
+```
+tools/daily-checkin.mjs                    # 直连上游，或 ZHIJU_GATEWAY 走自家网关
+.github/workflows/daily-checkin.yml        # cron '6 22 * * *' = 次日 06:06 北京时间
+```
+
+启用步骤：
+
+1. `Settings → Secrets and variables → Actions → New repository secret`
+2. Name 填 **`ZHIJU_TOKEN`**，Value 填上游 JWT（路由器上 `head -1 /opt/zhiju2api/tokens.txt`）
+3. 之后每天 06:06（北京时间）自动跑；也可以在 Actions 页面点 `Run workflow` 手动触发
+
+> **实测限制（重要）**：上游对**数据中心/代理 IP** 会回 `HTTP 405`，家宽 IP 正常。
+> 我这边走代理的机器每次都是 405，而路由器（家宽）一直成功 —— 所以 GitHub 的 runner
+> **有可能被拦**。脚本已带退避重试（405/429/5xx 重试 3 次），但仍不保证。
+> 想稳就挂一台家宽上的 self-hosted runner；或者干脆只靠路由器自己的定时任务（推荐，零依赖）。
+>
+> 另外 GitHub 会在仓库 60 天无活动后自动停用定时 workflow。
+
+两边都做也无害：签到本身幂等，第二次调用返回 `2016 已经签到`。
 
 > **时区是个坑**：`TZ=CST-8` 是 musl 认识的 POSIX 写法，**Go 不认**（Go 只读 IANA zoneinfo
 > 文件，而 OpenWrt 没有 tzdata），进程会静默退回 UTC —— 签到就跑到 08:05，日志也全早 8 小时。
