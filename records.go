@@ -29,8 +29,8 @@ type APIRecord struct {
 	// CostActual is what the balance actually moved by. They are recorded separately on
 	// purpose: the quote is not a guarantee — the model the site labels 实付=0 for chat
 	// turned out to deduct 48 灵力 per turn, while 升智-1 really did cost 0.
-	CostQuoted int `json:"cost_quoted,omitempty"`
-	CostActual int `json:"cost_actual,omitempty"`
+	CostQuoted int  `json:"cost_quoted,omitempty"`
+	CostActual int  `json:"cost_actual,omitempty"`
 	CostKnown  bool `json:"cost_known,omitempty"`
 }
 

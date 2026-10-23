@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +15,54 @@ import (
 	"strings"
 	"time"
 )
+
+// editFile is one input image from a multipart edit request.
+type editFile struct {
+	raw         []byte
+	filename    string
+	contentType string
+}
+
+// editFiles collects every uploaded input image from a multipart form.
+//
+// Both spellings matter in practice: OpenAI's own shape is `image[]`, and single-image
+// callers send `image`. Go's MultipartForm.Value/File are keyed by the exact name used, so
+// `image[]` files land under "image[]" and a lookup of "image" finds nothing — which is why
+// both names, plus the `[]` suffix on the singular, are tried.
+func editFiles(r *http.Request) []editFile {
+	if r.MultipartForm == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []editFile
+	for _, name := range []string{"image", "image[]", "images", "images[]", "image_file"} {
+		for _, fh := range r.MultipartForm.File[name] {
+			f, err := fh.Open()
+			if err != nil {
+				continue
+			}
+			raw, err := io.ReadAll(io.LimitReader(f, 32<<20))
+			f.Close()
+			if err != nil || len(raw) == 0 {
+				continue
+			}
+			// The same file can appear under several names (a form posting both `image`
+			// and `image[]` for one picture); upload it once.
+			sum := sha256.Sum256(raw)
+			key := hex.EncodeToString(sum[:])
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			ct := fh.Header.Get("Content-Type")
+			if ct == "" {
+				ct = sniffImageType(raw, fh.Filename)
+			}
+			out = append(out, editFile{raw: raw, filename: fh.Filename, contentType: ct})
+		}
+	}
+	return out
+}
 
 // ---- OpenAI image shapes -----------------------------------------------------------
 
@@ -614,15 +664,14 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, header, err := r.FormFile("image")
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "image file is required")
-		return
-	}
-	defer file.Close()
-	raw, err := io.ReadAll(io.LimitReader(file, s.cfg.MaxUploadBytes))
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+	// Every input file, not just the first. OpenAI's edit route is plural (`image[]`) and
+	// callers do send several — the canvas app attaches three reference images at once, and
+	// the prompt then refers to them by number ("Uploaded Image 1/2/3"). Reading only
+	// r.FormFile("image") silently dropped the rest, so the model received one picture plus
+	// references to images that were never uploaded, and failed.
+	files := editFiles(r)
+	if len(files) == 0 {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "image file is required (field `image` or `image[]`)")
 		return
 	}
 
@@ -635,13 +684,17 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.ImageTimeout)
 	defer cancel()
 
-	objectURL, err := s.uploadImage(ctx, raw, header.Filename, header.Header.Get("Content-Type"))
-	if err != nil {
-		s.writeUpstreamErr(w, err)
-		return
+	urls := make([]string, 0, len(files))
+	for _, f := range files {
+		objectURL, err := s.uploadImage(ctx, f.raw, f.filename, f.contentType)
+		if err != nil {
+			s.writeUpstreamErr(w, err)
+			return
+		}
+		logf("INFO", "input image %d/%d uploaded: %s", len(urls)+1, len(files), objectURL)
+		urls = append(urls, objectURL)
 	}
-	logf("INFO", "input image uploaded: %s", objectURL)
-	opts.InputURLs = []string{objectURL}
+	opts.InputURLs = urls
 
 	balanceBefore := s.balanceOf(ctx)
 	urls, sessionID, err := s.generate(ctx, res, opts)
